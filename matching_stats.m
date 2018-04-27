@@ -1,6 +1,6 @@
 
 
-function matching_stats(cluster,data)
+function matching_stats(cluster,data,xdata)
   
   nSes = length(cluster(2).list);
   nCluster = length(cluster);
@@ -40,7 +40,16 @@ function matching_stats(cluster,data)
     testROI(s).neurons = zeros(data(s).nROI,1);
   end
   
+  
+  cluster_stats = zeros(nCluster,2);    % first entry is number of ROIs in there, 2nd is ROI score
+  
   for c = 1:nCluster
+    if (mod(c,100)==0)
+      disp(sprintf('cluster %d',c))
+    end
+    cluster(c).score = get_ROI_score(cluster(c),data,xdata,0);
+    cluster_stats(c,1) = nnz(sum(cluster(c).list,2));
+    cluster_stats(c,2) = cluster(c).score;
     
     if ~isempty(cluster(c).list)
     %% get number of ROIs detected in this session
@@ -114,6 +123,8 @@ function matching_stats(cluster,data)
   disp(sprintf('saved under %s',path))
   
   
+  figure
+  scatter(cluster_stats(:,1),cluster_stats(:,2))
   
   
 %    fig = figure;
