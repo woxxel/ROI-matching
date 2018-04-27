@@ -325,7 +325,10 @@ function [model,histo] = match_buildModel(xdata,histo,para,nSes)
     ylabel('centroid distance','rotation',60)
     zlabel('P_{same}')
     
-    path = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/245/joint_model.png';
+%      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
+    basePath = '/media/mizuta/AS2/';
+    mouse = 884;
+    path = sprintf('%s%d/joint_model.png',basePath,mouse);
     print(path,'-dpng','-r300')
 %      saveas(fig_model,path,'jpg')
     
@@ -436,7 +439,10 @@ function [model,histo] = match_buildModel(xdata,histo,para,nSes)
 %  %      cb4 = colorbar(ax4,'horiz','Position',[pos(1) pos(2)-0.07 pos(3) 0.02]);
 %  %      title('P(dist,corr|others)')
     
-    path = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/245/joint_model_contour.png';
+%      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
+    basePath = '/media/mizuta/AS2/';
+    mouse = 884;
+    path = sprintf('%s%d/joint_model_contour.png',basePath,mouse);
     print(path,'-dpng','-r300')
 %      saveas(fig_model,path,'jpg')
     

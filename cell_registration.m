@@ -413,7 +413,12 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
     hist_matches = hist(nMatches);
     text(0.6,0.9,sprintf('# stable ROIs (s>=3): %d',sum(hist_matches(3:end))),'units','normalized','FontSize',14)
     
-    path = sprintf('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/245/hist_s=%d.jpg',nSes);
+    %      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
+    basePath = '/media/mizuta/AS2/';
+    mouse = 884;
+    path = sprintf('%s%d/hist_s=%d.jpg',basePath,mouse,nSes);
+    
+%      path = sprintf('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/245/hist_s=%d.jpg',nSes);
     saveas(fig_ses,path,'jpg')
     
     disp(sprintf('saved under %s',path))

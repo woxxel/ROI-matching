@@ -7,9 +7,12 @@ function [data] = match_loadSessions(nSes,mouse)
     
     data(nSes) = struct('shift',[],'rotation',[],'nROI',[],'A',[],'centroid',[],'norm',[]);
     
+    basePath = '/media/mizuta/AS2/';
+%      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
+    
     tic
-%      path_bg = '/media/wollex/Analyze_AS1/245/Session01/imageStack/reduced_MF1_LK1.mat';
-    path_bg = sprintf('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/%d/Session01/reduced_MF1_LK1.mat',mouse);
+    
+    path_bg = sprintf('%s%d/Session01/reduced_MF1_LK1.mat',basePath,mouse);
     loadDat = load(path_bg,'max_im');
     bg_ref = loadDat.max_im;
     imSize = size(bg_ref);
@@ -20,7 +23,7 @@ function [data] = match_loadSessions(nSes,mouse)
       disp(sprintf('loading session %02d',s))
       
 %        path_ROI = sprintf('/media/wollex/Analyze_AS1/245/Session%02d/resultsCNMF_MF1_LK1.mat',s);
-      path_ROI = sprintf('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/%d/Session%02d/resultsCNMF_MF1_LK1.mat',mouse,s);
+      path_ROI = sprintf('%s%d/Session%02d/resultsCNMF_MF1_LK1.mat',basePath,mouse,s);
       loadDat = load(path_ROI,'A2');
       data(s).nROI = size(loadDat.A2,2);
       
@@ -34,7 +37,7 @@ function [data] = match_loadSessions(nSes,mouse)
       else
         
 %          path_bg = sprintf('/media/wollex/Analyze_AS1/245/Session%02d/imageStack/reduced_MF1_LK1.mat',s);
-        path_bg = sprintf('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/%d/Session%02d/reduced_MF1_LK1.mat',mouse,s);
+        path_bg = sprintf('%s%d/Session%02d/reduced_MF1_LK1.mat',basePath,mouse,s);
         loadDat = load(path_bg,'max_im');
         bg_tmp = loadDat.max_im;
         
