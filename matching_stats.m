@@ -1,6 +1,6 @@
 
 
-function matching_stats(cluster)
+function matching_stats(cluster,data)
   
   nSes = length(cluster(2).list);
   nCluster = length(cluster);
@@ -8,7 +8,7 @@ function matching_stats(cluster)
   nMatches = [cluster.ct];
   hist_matches = hist(nMatches);
   
-  fig = figure('position',[100 100 800 500])
+  fig = figure('position',[100 100 800 500]);
   
   subplot(1,2,2)
   
@@ -35,8 +35,10 @@ function matching_stats(cluster)
   nROI_match = zeros(nSes,1);
   nROI_range_match = zeros(nSes-1,1);
   nROI_match(1) = nan;
-  
-  nROI_test = 0;
+  testROI(nSes) = struct;
+  for s=1:nSes
+    testROI(s).neurons = zeros(data(s).nROI,1);
+  end
   
   for c = 1:nCluster
     
@@ -46,6 +48,9 @@ function matching_stats(cluster)
       %% get number of ROIs detected same as last session
       for s = 1:nSes
         if nnz(cluster(c).list(s,:)) > 0
+          for n = cluster(c).list(s,:)
+            testROI(s).neurons(n) = testROI(s).neurons(n) + 1;
+          end
           nROI(s,1) = nROI(s,1)+nnz(cluster(c).list(s,:));
           if nnz(cluster(c).list) == 1
             nROI(s,2) = nROI(s,2) + 1;
@@ -67,7 +72,12 @@ function matching_stats(cluster)
     end
   end
   
-  disp(sprintf('total number of ROIs: %d, %d', nROI_test, sum(nROI(:,1))))
+  for s=1:nSes
+    disp(sprintf('session: %d:  mean: %6.4g, max: %6.4g',s,mean(testROI(s).neurons),max(testROI(s).neurons)))
+  end
+  
+  
+  disp(sprintf('total number of ROIs: %d', sum(nROI(:,1))))
   
   subplot(1,2,1)
   hold on
@@ -81,7 +91,7 @@ function matching_stats(cluster)
   ylabel('total number')
   xlabel('session')
   
-  ax3 = axes('position',[0.25,0.2,0.2,0.2])
+  ax3 = axes('position',[0.25,0.2,0.2,0.2]);
   plot(ax3,nROI_match./nROI(:,1))
   xlabel(ax3,'session')
   ylabel(ax3,'% matched')

@@ -1,5 +1,4 @@
 
-
 function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model,para,histo,p_thr,nSes,mouse,basePath)
 
   %%% -------------------------------------- Cell registration ---------------------------------------
@@ -12,6 +11,9 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
     
     model.type = 'joint';
     
+    sz_model = size(model.p_same_joint);
+    
+    disp('preparing data...')
     tic
 %      model = 'centroids';
 %      model = 'centroids';
@@ -27,8 +29,8 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
         xdata(s,sm).p_same_dist = sparse(data(s).nROI,data(sm).nROI);
         switch model.type
 %            case 'dist'
-          case 'corr'
-            xdata(s,sm).p_same_corr = sparse(data(s).nROI,data(sm).nROI);
+%            case 'corr'
+%              xdata(s,sm).p_same_corr = sparse(data(s).nROI,data(sm).nROI);
           case 'joint'
             xdata(s,sm).p_same_joint = sparse(data(s).nROI,data(sm).nROI);
         end
@@ -37,6 +39,33 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
     toc
     
     %% here, all cells that are not surely different are put together in clusters
+    
+    disp('writing data...')
+    tic
+    for s = 1:nSes
+      for sm = s+1:nSes
+        for n = 1:data(s).nROI
+          neighbours = xdata(s,sm).neighbours(n,:) > 0;
+          idx_nb = find(neighbours);
+          idx_dist = max(1,ceil(para.nbins*xdata(s,sm).dist(n,neighbours)/para.dist_max));
+          idx_corr = max(1,ceil(para.nbins*xdata(s,sm).fp_corr(n,neighbours)/para.corr_max));
+          
+          val_tmp = model.p_same_dist(idx_dist);
+          xdata(s,sm).p_same_dist(n,neighbours) = val_tmp;
+          xdata(sm,s).p_same_dist(neighbours,n) = val_tmp;
+          
+          for i=1:length(idx_dist)
+            val_tmp = model.p_same_joint(idx_dist(i),idx_corr(i));
+            xdata(s,sm).p_same_joint(n,idx_nb(i)) = val_tmp;
+            xdata(sm,s).p_same_joint(idx_nb(i),n) = val_tmp;
+          end
+        end
+      end
+    end
+    toc
+    
+    disp('clustering...')
+    tic
     for s = 1:nSes
       
       for sm = 1:nSes
@@ -53,25 +82,6 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
             cluster(data(s).cluster(n).ID).list = zeros(nSes,1);
             cluster(data(s).cluster(n).ID).list(s) = n;
             cluster(data(s).cluster(n).ID).ct = 1;
-          end
-          
-          neighbours = xdata(s,sm).neighbours(n,:) > 0;
-          
-          idx_dist = max(1,ceil(para.nbins*xdata(s,sm).dist(n,neighbours)/para.dist_max));
-%            [~,idx_dist] = min(abs(xdata(s,sm).dist(n,neighbours) - histo.dist_x));
-          xdata(s,sm).p_same_dist(n,neighbours) = model.p_same_dist(idx_dist);
-          xdata(sm,s).p_same_dist(neighbours,n) = model.p_same_dist(idx_dist);
-          
-          idx_corr = max(1,ceil(para.nbins*xdata(s,sm).fp_corr(n,neighbours)/para.corr_max));
-          if strcmp(model.type,'corr')
-            xdata(s,sm).p_same_corr(n,neighbours) = model.p_same_corr(idx_corr);
-            xdata(sm,s).p_same_corr(neighbours,n) = model.p_same_corr(idx_corr);
-          end
-          
-          idx_nb = find(neighbours);
-          for i=1:length(idx_dist)
-            xdata(s,sm).p_same_joint(n,idx_nb(i)) = model.p_same_joint(idx_dist(i),idx_corr(i));
-            xdata(sm,s).p_same_joint(idx_nb(i),n) = model.p_same_joint(idx_dist(i),idx_corr(i));
           end
           
           cluster_candidates = find(xdata(s,sm).p_same_dist(n,:)>(1-p_thr));    %% all ROIs in sm that are candidates to be same as ROI (s,n)
@@ -99,8 +109,6 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
     nMatches = [cluster.ct];
     disp(sprintf('number of clusters: %d',nCluster))
     disp(sprintf('number of real clusters: %d',sum(nMatches > 1)))
-%      disp(sprintf('number of session-matchings: %d',sesmatch))
-%      disp(sprintf('polygamous ROIs: %d',polygamy))
     toc
     disp('pre-clustering done')
     
@@ -131,7 +139,6 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
     A_thr = 400;
     
     disp('registering')
-%      p_thr = 0.95;
     while c < length(cluster)
       
       %% first, remove matched ROIs from cluster
@@ -152,7 +159,7 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
         
         %% merge status: for every neuron in the final_list, have 3 entries: previous, current and following session match status
         %% match status does not refer to matching to a certain neuron, but rather assigning to this cluster!
-        cluster_final(c_final) = struct('list',zeros(nSes,1),'fp_corr',zeros(nSes,1),'dist',zeros(nSes,1),'p_same',zeros(nSes,1),'merge_status',false(nSes,3),'ct',0);
+        cluster_final(c_final) = struct('list',zeros(nSes,1),'merge_status',false(nSes,3),'ct',0);
         
         for s = 1:nSes
         
@@ -166,15 +173,14 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
               n = cluster(c).list(s,cluster(c).list(s,:)>0);
               n = n(1);
               cluster_final(c_final).list(s,1) = n;
-              cluster_final(c_final).p_same(s,1) = -1;
               
               %% set reference to first ROI detected
               n_ref = n;
               s_ref = s;
               
-              %% have alternative reference to most recently detected ROI
-              n_ref_alt = n;
-              s_ref_alt = s;
+%                %% have alternative reference to most recently detected ROI
+%                n_ref_alt = n;
+%                s_ref_alt = s;
             else
               
               if strcmp(mode,'threshold')
@@ -183,46 +189,12 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
                 if p_best_match > p_thr
                   best_match_s = matches_s(idx_match);
                   
-                  
-                  
-                  [matches_s_ref, p_same_recip] = get_matches(cluster(c),xdata,model.type,1-p_thr,s,best_match_s,s_ref);
-                  [p_best_recip,idx_recip] = max(p_same_recip);
-%                    [matches_s_ref(idx_recip) n_ref]
-                  if (matches_s_ref(idx_recip) == n_ref) && (p_best_recip > p_thr)
-%                      disp('matched:')
-%                      [p_best_match p_best_recip]
+                  %% check for reciprocity
+                  [matches_s_ref, p_same_s_ref] = get_matches(cluster(c),xdata,model.type,1-p_thr,s,best_match_s,s_ref);
+                  [p_best_s_ref,idx_s_ref] = max(p_same_s_ref);
+                  if (matches_s_ref(idx_s_ref) == n_ref) && (p_best_s_ref > p_thr)
                     cluster_final(c_final).list(s,1) = best_match_s;
                   end
-%                      n_ref_alt = best_match_s;
-%                      s_ref_alt = s;
-                    
-                  
-                  
-                  
-                  
-%                    %% check reciprocity
-%                    for sm = s-1:-1:s_ref
-%                      [matches_s_ref, p_same_recip] = get_matches(cluster(c),xdata,model.type,1-p_thr,s,best_match_s,sm);
-%                      [p_best_recip,idx_recip] = max(p_same_recip);
-%                      
-%                      %%% now, add possibility to find several ROIs within one session
-%                      if p_best_recip > p_thr
-%                        n_match_recip = matches_s_ref(idx_recip);
-%                        
-%                        if sm==s_ref && n_match_recip == n_ref
-%                          cluster_final(c_final).list(s,1) = best_match_s;
-%                          
-%                          n_ref_alt = best_match_s;
-%                          s_ref_alt = s;
-%                          
-%                        else  %% break if ROI is found to belong to other cluster
-%                          break
-%                        end
-%                      end
-%                    end
-                  %% if went all the way through here without finding any partner, go to next session
-                else
-                  continue
                 end
               
               
@@ -383,7 +355,6 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
           [s w] = find(cluster_final(c_final).list);
           for i = 1:length(s)
             n = cluster_final(c_final).list(s(i),w(i));
-  %            [s(i) n]
             data(s(i)).matched(n) = true;
           end
           
@@ -403,7 +374,7 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
               n = n(~data(s).matched(n));
               cluster(c_idx).list(s,1:length(n)) = n;
             end
-            if nnz(cluster(c_idx).list) < 2
+            if nnz(cluster(c_idx).list) < 1
   %              disp('purging needed?')
               cluster(c_idx) = [];
             end
