@@ -4,13 +4,13 @@ function check_cluster(cluster,data,xdata,model,para,p_thr,idx)
   
   close all
   %% pick a random cluster,if none given
-  if nargin < 5 || isempty(idx)
+  if nargin < 7 || isempty(idx)
     idx = randi(length(cluster))
   end
   disp(sprintf('displaying cluster #%d',idx))
   
   cluster(idx).list
-%    cluster(idx).list = cluster(idx).list(:,1);
+  cluster(idx).list = cluster(idx).list(:,1);
 %    cluster(idx).list
   
   %% if more than one entry:
@@ -59,10 +59,10 @@ function check_cluster(cluster,data,xdata,model,para,p_thr,idx)
     
     cleanup = true;
     
-%      plot_check_cluster(cluster(idx),res,data,nSes,17);
+%      plot_check_cluster(cluster(idx),res,data,nSes,0);
     
     ROI_score_old = get_ROI_score(res,0)
-    plot_ROIs(cluster(idx),data,res,0)
+%      plot_ROIs(cluster(idx),data,res,0)
     
     %% first, check cluster removal, then check single neurons
 %      s_rm = find(nanmean(res.prob) < 0.5)
@@ -85,23 +85,23 @@ function check_cluster(cluster,data,xdata,model,para,p_thr,idx)
       
       ROI_score_test = zeros(nSes,1);
       for s = 1:nSes
-        if nnz(cluster(idx).list(s,:)) > 1  %% something's wrong with merge status
-          disp('test for merging...')
-          %% should test effect of merging vs removing extra ROIs (or all)
-          ROI_score_new = get_ROI_score_merge(cluster(idx),data,model,para,res,s)   %% merge data.A from both ROIs, recalculate prob and fp_1way and calculate score (by calling get_ROI_score with temporary res struct)
-          disp(sprintf('new ROI score: %6.4g vs %6.4g',ROI_score_new,ROI_score_old))
-          if ROI_score_new > ROI_score_old
-            disp(sprintf('merging ROI %d & %d in session #%d from cluster to enhance cluster score from %6.4g to %6.4g',cluster(idx).list(s,1),cluster(idx).list(s,2),s,ROI_score_old,ROI_score_new))
-            plot_ROIs(cluster(idx),data,res,s)
-          end
-          
-          
-%            disp('pause')
-%            pause(5)
-          
-        else
+%          if nnz(cluster(idx).list(s,:)) > 1  %% something's wrong with merge status
+%            disp('test for merging...')
+%            %% should test effect of merging vs removing extra ROIs (or all)
+%            ROI_score_new = get_ROI_score_merge(cluster(idx),data,model,para,res,s)   %% merge data.A from both ROIs, recalculate prob and fp_1way and calculate score (by calling get_ROI_score with temporary res struct)
+%            disp(sprintf('new ROI score: %6.4g vs %6.4g',ROI_score_new,ROI_score_old))
+%            if ROI_score_new > ROI_score_old
+%              disp(sprintf('merging ROI %d & %d in session #%d from cluster to enhance cluster score from %6.4g to %6.4g',cluster(idx).list(s,1),cluster(idx).list(s,2),s,ROI_score_old,ROI_score_new))
+%              plot_ROIs(cluster(idx),data,res,s)
+%            end
+%            
+%            
+%  %            disp('pause')
+%  %            pause(5)
+%            
+%          else
           ROI_score_test(s) = get_ROI_score(res,s);
-        end
+%          end
       end
       
       [ROI_score_new,s_rm] = max(ROI_score_test);
@@ -129,7 +129,7 @@ function check_cluster(cluster,data,xdata,model,para,p_thr,idx)
     end
     plot_ROIs(cluster(idx),data,res,0)
     
-    
+%      plot_check_cluster(cluster(idx),res,data,nSes,0);
   end
   
 end
@@ -174,7 +174,7 @@ function [ROI_score] = get_ROI_score(res,s_rm)
   
 %    ROI_score = 1/3*(p_mean^(1+p_var) + frac_1w_mean^(1+frac_1w_var) + nanmin(res.prob(:)))*N/nSes;
 %    ROI_score = (p_mean^(1+p_var) * frac_1w_mean^(1+frac_1w_var) * nanmin(res.prob(:)))^(1/3)*N/nSes;
-  ROI_score = 1/5*(p_mean^(1+p_var) + frac_1w_mean^(1+frac_1w_var) + nanmin(res.prob(:)) + 2*N/nSes);
+  ROI_score = 1/4*(p_mean^(1+p_var) + frac_1w_mean^(1+frac_1w_var) + nanmin(res.prob(:)) + N/nSes);
   
 %    disp(sprintf('s: %d ROI score: %6.4g',s_rm(1), ROI_score))
 end

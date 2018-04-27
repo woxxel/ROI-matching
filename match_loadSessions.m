@@ -1,15 +1,12 @@
 
 
-function [data] = match_loadSessions(nSes,mouse)
+function [data] = match_loadSessions(nSes,mouse,basePath)
 
     rot_max = 1;
     rot = linspace(-rot_max,rot_max,10*rot_max+1);
     
     data(nSes) = struct('shift',[],'rotation',[],'nROI',[],'A',[],'centroid',[],'norm',[]);
-    
-    basePath = '/media/mizuta/AS2/';
-%      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
-    
+        
     tic
     
     path_bg = sprintf('%s%d/Session01/reduced_MF1_LK1.mat',basePath,mouse);
@@ -94,5 +91,8 @@ function [data] = match_loadSessions(nSes,mouse)
     end
     disp('loading done')
     toc
+    
+    savePath = sprintf('%s%d/matching_data.m',basePath,mouse)
+    save(savePath,'data','-v7.3')
     
 end

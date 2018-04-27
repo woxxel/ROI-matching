@@ -1,6 +1,6 @@
 
 
-function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model,para,histo,p_thr,nSes)
+function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model,para,histo,p_thr,nSes,mouse,basePath)
 
   %%% -------------------------------------- Cell registration ---------------------------------------
     
@@ -108,8 +108,8 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
     histogram(nMatches)
     
     
-%      mode = 'threshold';
-    mode = 'other';
+    mode = 'threshold';
+%      mode = 'other';
     
     
     %% now, go through all clusters and assign surely matching ROIs to each other (p_same>0.95)
@@ -143,7 +143,7 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
         end
       end
       
-      if nnz(cluster(c).list) < 2   %% only look at clusters, that actually have some matching possibilities
+      if nnz(cluster(c).list) < 1   %% only look at clusters, that actually have some matching possibilities
         cluster(c) = [];
       else
         c_final = c_final + 1;
@@ -178,31 +178,48 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
             else
               
               if strcmp(mode,'threshold')
-                [matches_s, p_same] = get_matches(cluster(c),xdata,model.type,1-p_thr,s_ref,n_ref,s);
-                [p_corr_match,idx_match] = max(p_same);
-                if p_corr_match > p_thr
+                [matches_s, p_same_match] = get_matches(cluster(c),xdata,model.type,1-p_thr,s_ref,n_ref,s);
+                [p_best_match,idx_match] = max(p_same_match);
+                if p_best_match > p_thr
                   best_match_s = matches_s(idx_match);
                   
-                  %% check reciprocity
-                  for sm = s-1:-1:s_ref
-                    [matches_s_ref, p_same_recip] = get_matches(cluster(c),xdata,model.type,1-p_thr,s,best_match_s,sm);
-                    [p_same_recip,idx_recip] = max(p_same_recip);
-                    
-                    %%% now, add possibility to find several ROIs within one session
-                    if p_same_recip > p_thr
-                      n_match_recip = matches_s_ref(idx_recip);
-                      
-                      if sm==s_ref && n_match_recip == n_ref
-                        cluster_final(c_final).list(s,1) = best_match_s;
-                        
-                        n_ref_alt = best_match_s;
-                        s_ref_alt = s;
-                        
-                      else  %% break if ROI is found to belong to other cluster
-                        break
-                      end
-                    end
+                  
+                  
+                  [matches_s_ref, p_same_recip] = get_matches(cluster(c),xdata,model.type,1-p_thr,s,best_match_s,s_ref);
+                  [p_best_recip,idx_recip] = max(p_same_recip);
+%                    [matches_s_ref(idx_recip) n_ref]
+                  if (matches_s_ref(idx_recip) == n_ref) && (p_best_recip > p_thr)
+%                      disp('matched:')
+%                      [p_best_match p_best_recip]
+                    cluster_final(c_final).list(s,1) = best_match_s;
                   end
+%                      n_ref_alt = best_match_s;
+%                      s_ref_alt = s;
+                    
+                  
+                  
+                  
+                  
+%                    %% check reciprocity
+%                    for sm = s-1:-1:s_ref
+%                      [matches_s_ref, p_same_recip] = get_matches(cluster(c),xdata,model.type,1-p_thr,s,best_match_s,sm);
+%                      [p_best_recip,idx_recip] = max(p_same_recip);
+%                      
+%                      %%% now, add possibility to find several ROIs within one session
+%                      if p_best_recip > p_thr
+%                        n_match_recip = matches_s_ref(idx_recip);
+%                        
+%                        if sm==s_ref && n_match_recip == n_ref
+%                          cluster_final(c_final).list(s,1) = best_match_s;
+%                          
+%                          n_ref_alt = best_match_s;
+%                          s_ref_alt = s;
+%                          
+%                        else  %% break if ROI is found to belong to other cluster
+%                          break
+%                        end
+%                      end
+%                    end
                   %% if went all the way through here without finding any partner, go to next session
                 else
                   continue
@@ -414,14 +431,13 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
     text(0.6,0.9,sprintf('# stable ROIs (s>=3): %d',sum(hist_matches(3:end))),'units','normalized','FontSize',14)
     
     %      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
-    basePath = '/media/mizuta/AS2/';
-    mouse = 884;
-    path = sprintf('%s%d/hist_s=%d.jpg',basePath,mouse,nSes);
+    
+%      path = sprintf('%s%d/hist_s=%d.jpg',basePath,mouse,nSes);
     
 %      path = sprintf('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/245/hist_s=%d.jpg',nSes);
-    saveas(fig_ses,path,'jpg')
+%      saveas(fig_ses,path,'jpg')
     
-    disp(sprintf('saved under %s',path))
+%      disp(sprintf('saved under %s',path))
     
 end
 

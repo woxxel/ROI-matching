@@ -1,5 +1,6 @@
 
-function [model,histo] = match_buildModel(xdata,histo,para,nSes)
+function [model,histo] = match_buildModel(xdata,histo,para,nSes,mouse,basePath)
+    
     
     tic
     
@@ -326,8 +327,6 @@ function [model,histo] = match_buildModel(xdata,histo,para,nSes)
     zlabel('P_{same}')
     
 %      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
-    basePath = '/media/mizuta/AS2/';
-    mouse = 884;
     path = sprintf('%s%d/joint_model.png',basePath,mouse);
     print(path,'-dpng','-r300')
 %      saveas(fig_model,path,'jpg')
@@ -440,8 +439,7 @@ function [model,histo] = match_buildModel(xdata,histo,para,nSes)
 %  %      title('P(dist,corr|others)')
     
 %      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
-    basePath = '/media/mizuta/AS2/';
-    mouse = 884;
+    
     path = sprintf('%s%d/joint_model_contour.png',basePath,mouse);
     print(path,'-dpng','-r300')
 %      saveas(fig_model,path,'jpg')
