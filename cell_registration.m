@@ -34,12 +34,13 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
         end
       end
     end
+    toc
     
     %% here, all cells that are not surely different are put together in clusters
     for s = 1:nSes
       
       for sm = 1:nSes
-        if s == sm
+        if sm == s
           continue
         end
         
@@ -122,7 +123,7 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
     merge2_ct = 0;
     merge_ct_real = 0;
     c = 1;
-    c_final = 1;
+    c_final = 0;
     change_ct = 0;
     switch_ct = 0;
     p_corr_thr = 0.95;
@@ -167,8 +168,13 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
               cluster_final(c_final).list(s,1) = n;
               cluster_final(c_final).p_same(s,1) = -1;
               
+              %% set reference to first ROI detected
               n_ref = n;
               s_ref = s;
+              
+              %% have alternative reference to most recently detected ROI
+              n_ref_alt = n;
+              s_ref_alt = s;
             else
               
               if strcmp(mode,'threshold')
@@ -182,7 +188,6 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
                     [matches_s_ref, p_same_recip] = get_matches(cluster(c),xdata,model.type,1-p_thr,s,best_match_s,sm);
                     [p_same_recip,idx_recip] = max(p_same_recip);
                     
-                    
                     %%% now, add possibility to find several ROIs within one session
                     if p_same_recip > p_thr
                       n_match_recip = matches_s_ref(idx_recip);
@@ -190,12 +195,8 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
                       if sm==s_ref && n_match_recip == n_ref
                         cluster_final(c_final).list(s,1) = best_match_s;
                         
-%                          cluster_final(c_final).fp_corr(s,1) = xdata(s_ref,s).fp_corr(n_match_recip,best_match_s);
-%                          cluster_final(c_final).dist(s,1) = xdata(s_ref,s).dist(n_match_recip,best_match_s);
-%                          cluster_final(c_final).p_same(s,1) = p_same_recip;
-                        
-                        n_ref = best_match_s;
-                        s_ref = s;
+                        n_ref_alt = best_match_s;
+                        s_ref_alt = s;
                         
                       else  %% break if ROI is found to belong to other cluster
                         break
@@ -208,9 +209,11 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
                 end
               
               
-              
+              %% matching due to most probable ROI (including merging etc)
               else
-%                  disp('----------------- new ---------------')
+                
+                %% check for matches with first detected ROI
+                %% also, check for matches with most recently detected ROI
                 [matches_s, p_same_match] = get_matches(cluster(c),xdata,model.type,1-p_thr,s_ref,n_ref,s);
                 [~,idx_match] = max(p_same_match);
                 best_match_s = matches_s(idx_match);
@@ -218,9 +221,6 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
                 for i=1:length(matches_s)
                   [matches_s_ref, p_same_recip] = get_matches(cluster(c),xdata,model.type,1-p_thr,s,matches_s(i),s_ref);
                   [~,idx_recip] = max(p_same_recip);
-                  
-                  %% what, if 2 or more occurences happen?
-                  %% -> should gather all possible matches first, then decide which one to take, based on probability
                   
                   if matches_s(i) == best_match_s && matches_s_ref(idx_recip) == n_ref    %% if they are each others favorites
                     %% additionally check, whether this probability is larger than ... something?!
@@ -282,11 +282,11 @@ function [data,xdata,cluster,cluster_final] = cell_registration(data,xdata,model
                   
                 end
                 
-%                  if any(cluster_final(c_final).list(s,:))
+                if any(cluster_final(c_final).list(s,:))
                   %% allow more than one neuron to go here
-%                    n_ref = best_match_s;   %% this should include merging possibilities
-%                    s_ref = s;
-%                  end
+                  n_ref_alt = best_match_s;   %% this should include merging possibilities
+                  s_ref_alt = s;
+                end
               end
             end
           end
