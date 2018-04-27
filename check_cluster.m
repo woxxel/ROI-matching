@@ -227,6 +227,8 @@ function [ROI_score] = get_ROI_score_merge(cluster,data,model,para,res,s_merge)
     
     res.prob(s,s_merge) = model.p_same_joint(idx_dist,idx_corr);
     res.prob(s_merge,s) = model.p_same_joint(idx_dist,idx_corr);
+    
+    %% now add 1w correlation
   end
   
 %    [fp_corr',res.corr(s_merge,:)']
