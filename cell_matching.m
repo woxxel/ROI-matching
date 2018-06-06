@@ -1,10 +1,11 @@
 
 
 
-function [ROI_cluster_final] = cell_matching(pathData,p_thr)
+function [ROI_cluster_final,ROI_data] = cell_matching(basePath,mouse,p_thr)
     
     disp('loading data from file...')
     tic
+    pathData = sprintf('%s%d/cluster_registered.mat',basePath,mouse);
     data = load(pathData);
     ROI_cluster = data.ROI_cluster;
     ROI_data = data.data;
@@ -37,6 +38,9 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
     disp('registering')
     while c < length(ROI_cluster)
       
+      if mod(c,100)==0
+        disp(c)
+      end
       %% first, remove matched ROIs from ROI_cluster
       [s w] = find(ROI_cluster(c).list);
       for i = 1:length(s)
@@ -74,19 +78,20 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
               n_ref = n;
               s_ref = s;
               
-%                %% have alternative reference to most recently detected ROI
+%                %% have alternative reference to most recently detected ROI ->
+%                %% always check this one as well! (merging possibilities etc should be detected better like that)
 %                n_ref_alt = n;
 %                s_ref_alt = s;
             else
               
               if strcmp(mode,'threshold')
-                [matches_s, p_same_match] = get_matches(ROI_cluster(c),ROI_xdata,1-p_thr,s_ref,n_ref,s);
-                [p_best_match,idx_match] = max(p_same_match);
-                if p_best_match > p_thr
-                  best_match_s = matches_s(idx_match);
+                [matches_s, p_same_s] = get_matches(ROI_cluster(c),ROI_xdata,0.05,s_ref,n_ref,s);
+                [p_best_s,idx_s] = max(p_same_s);
+                if p_best_s > p_thr
+                  best_match_s = matches_s(idx_s);
                   
                   %% check for reciprocity
-                  [matches_s_ref, p_same_s_ref] = get_matches(ROI_cluster(c),ROI_xdata,1-p_thr,s,best_match_s,s_ref);
+                  [matches_s_ref, p_same_s_ref] = get_matches(ROI_cluster(c),ROI_xdata,0.05,s,best_match_s,s_ref);
                   [p_best_s_ref,idx_s_ref] = max(p_same_s_ref);
                   if (matches_s_ref(idx_s_ref) == n_ref) && (p_best_s_ref > p_thr)
                     ROI_cluster_final(c_final).list(s,1) = best_match_s;
@@ -99,17 +104,18 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
                 
                 %% check for matches with first detected ROI
                 %% also, check for matches with most recently detected ROI
-                [matches_s, p_same_match] = get_matches(ROI_cluster(c),ROI_xdata,1-p_thr,s_ref,n_ref,s);
-                [~,idx_match] = max(p_same_match);
-                best_match_s = matches_s(idx_match);
+                [matches_s, p_same_s] = get_matches(ROI_cluster(c),ROI_xdata,0.05,s_ref,n_ref,s);
+                [~,idx_s] = max(p_same_s);
+                best_match_s = matches_s(idx_s);
                 
                 for i=1:length(matches_s)
-                  [matches_s_ref, p_same_recip] = get_matches(ROI_cluster(c),ROI_xdata,1-p_thr,s,matches_s(i),s_ref);
-                  [~,idx_recip] = max(p_same_recip);
+                %%% should only first best match (matches_s_ref) be considered? or also 2nd best?
+                  [matches_s_ref, p_same_s_ref] = get_matches(ROI_cluster(c),ROI_xdata,0.05,s,matches_s(i),s_ref);
+                  [~,idx_s_ref] = max(p_same_s_ref);
                   
-                  if matches_s(i) == best_match_s && matches_s_ref(idx_recip) == n_ref    %% if they are each others favorites
+                  if matches_s(i) == best_match_s && matches_s_ref(idx_s_ref) == n_ref    %% if they are each others favorites
                     %% additionally check, whether this probability is larger than ... something?!
-                    if p_same_recip(idx_recip) > 0.05
+                    if p_same_s_ref(idx_s_ref) > 0.05
                       ROI_cluster_final(c_final).merge_status(s_ref,3) = true;
                       ROI_cluster_final(c_final).merge_status(s,1) = true;
                       
@@ -122,17 +128,15 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
                   elseif matches_s(i) == best_match_s                 %% if chosen ROI rather matches with another one
                   %% do not match!! (or rather: how much different are they? look for merging possibility?)
                   %%% here, should check for 2nd best match
-                    if (p_same_recip(idx_recip) - p_same_match(idx_match) > 0.5)  %% really wants to match another one -> do not include in this ROI_cluster
+                    if (p_same_s_ref(idx_s_ref) - p_same_s(idx_s) > 0.5)  %% really wants to match another one -> do not include in this ROI_cluster (very rare)
                       change_ct = change_ct + 1;
-%                        disp(sprintf('get me outa here, p_recip: %6.4g, p_match: %6.4g, change_ct=%d',p_same_recip(idx_recip),p_same_match(idx_match),change_ct))
                     else                                           %% if there might be a chance of both matching -> merge?
                       ROI_cluster_final(c_final).merge_status(s_ref,2:3) = true;
                       ROI_cluster_final(c_final).merge_status(s,1) = true;
                       merge_ct = merge_ct + 1;
-%                        disp(sprintf('merge me!, p_recip: %6.4g, p_match: %6.4g, merge_ct=%d',p_same_recip(idx_recip),p_same_match(idx_match),merge_ct))
-                      if ~ismember(matches_s_ref(idx_recip),ROI_cluster_final(c_final).list(s_ref,:))
+                      if ~ismember(matches_s_ref(idx_s_ref),ROI_cluster_final(c_final).list(s_ref,:))
                         idx = nnz(ROI_cluster_final(c_final).list(s_ref,:)) + 1;
-                        ROI_cluster_final(c_final).list(s_ref,idx) = matches_s_ref(idx_recip);
+                        ROI_cluster_final(c_final).list(s_ref,idx) = matches_s_ref(idx_s_ref);
                       end
                       if ~ismember(matches_s(i),ROI_cluster_final(c_final).list(s,:))
                         idx = nnz(ROI_cluster_final(c_final).list(s,:)) + 1;
@@ -140,9 +144,8 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
                       end
                     end
                     
-                  elseif matches_s_ref(idx_recip) == n_ref
-  %                    disp('new lover found')
-                    if (p_same_recip(idx_recip) - p_same_match(idx_match) > 0.5)  %% if probabilities far exceed, change match
+                  elseif matches_s_ref(idx_s_ref) == n_ref
+                    if (p_same_s_ref(idx_s_ref) - p_same_s(idx_s) > 0.5)  %% if probabilities far exceed, change match
                       ROI_cluster_final(c_final).merge_status(s_ref,3) = true;
 %                        ROI_cluster_final(c_final).list(s,:) = 0;
                       if ~ismember(matches_s(i),ROI_cluster_final(c_final).list(s,:))
@@ -151,11 +154,9 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
                         ROI_cluster_final(c_final).merge_status(s,1) = true;
                       end
                       switch_ct = switch_ct + 1;
-%                        disp(sprintf('switch!, p_recip: %6.4g, p_match: %6.4g, merge_ct=%d',p_same_recip(idx_recip),p_same_match(idx_match),switch_ct))
                     else
                       
                       merge2_ct = merge2_ct + 1;
-%                        disp(sprintf('merge!, p_recip: %6.4g, p_match: %6.4g, merge_ct=%d',p_same_recip(idx_recip),p_same_match(idx_match),merge2_ct))
                       ROI_cluster_final(c_final).merge_status(s,2) = true;
                       if ~ismember(matches_s(i),ROI_cluster_final(c_final).list(s,:))
                         idx = nnz(ROI_cluster_final(c_final).list(s,:)) + 1;
@@ -180,8 +181,8 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
         %% obtain and calculate values for ROI score
         score = prepare_ROI_score(ROI_cluster_final(c_final),ROI_data,ROI_xdata);
         
-        ROI_cluster_final(c_final) = ROI_cleanup(ROI_cluster_final(c_final),score);
-        ROI_cluster_final(c_final).score = get_ROI_score(ROI_cluster_final(c_final),score,'final',0);
+        ROI_cluster_final(c_final) = ROI_cleanup(ROI_cluster_final(c_final),score,c_final,ROI_data);
+        ROI_cluster_final(c_final).score = get_ROI_score(ROI_cluster_final(c_final),score,0);
         
         %%% filling gaps in ROI cluster should be done in other function for all ROIs > certain score and ct
         %%% it should...
@@ -206,6 +207,7 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
           for i = 1:length(s)
             n = ROI_cluster_final(c_final).list(s(i),w(i));
             ROI_data(s(i)).matched(n) = true;
+            ROI_data(s(i)).cluster_neuron(c) = n;     %%% assign cluster-id to ROI
           end
           
           if nnz(ROI_cluster_final(c_final).list) < 1
@@ -235,6 +237,16 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
       end
     end
     
+    %%% fill up cluster_neuron arrays to cover all clusters
+    for s = 1:nSes
+      if length(ROI_data(s).cluster_neuron) < c_final
+        ROI_data(s).cluster_neuron(c_final) = 0;
+      end
+%        [s length(ROI_data(s).cluster_neuron)]
+%        ROI_data(s).cluster_neuron = cat(1,ROI_data(s).cluster_neuron',zeros(c_final - length(ROI_data(s).cluster_neuron),1))
+      [s size(ROI_data(s).cluster_neuron)]
+    end
+    
     nMatches = [ROI_cluster_final.ct];
     disp(sprintf('number of ROI_clusters: %d',c_final))
     disp(sprintf('merging attempts: %d',merge_ct))
@@ -253,12 +265,14 @@ function [ROI_cluster_final] = cell_matching(pathData,p_thr)
     
     %      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
     
-%      path = sprintf('%s%d/hist_s=%d.jpg',basePath,mouse,nSes);
+%      path = sprintf('%s%d/hist_s=%d.jpg',bassePath,mouse,nSes);
     
 %      path = sprintf('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/245/hist_s=%d.jpg',nSes);
 %      saveas(fig_ses,path,'jpg')
     
-%      disp(sprintf('saved under %s',path))
+    savePath = sprintf('%s%d/ROI_final_p=%4.2g.mat',basePath,mouse,p_thr);    
+    save(savePath,'ROI_cluster_final','ROI_data','-v7.3')
+    disp(sprintf('saved under %s',savePath))
     
 end
 
@@ -286,12 +300,12 @@ function [n, p_same] = get_matches(ROI_cluster,ROI_xdata,p_thr,s_ref,n_ref,s)
 end
 
 
-function ROI_cleanup(ROI_cluster,score)
+function [ROI_cluster] = ROI_cleanup(ROI_cluster,score,c_final,data)
   
   cleanup = true;
   
   while cleanup
-    ROI_score_old = get_ROI_score(ROI_cluster,score,'compare',0);
+    ROI_score_old = get_ROI_score(ROI_cluster,score,0);
     
     % get average probability and check all ROIs that are below
     s_test = find(nanmean(score.prob) < nanmean(score.prob(:))-nanvar(score.prob(:)));
@@ -300,13 +314,18 @@ function ROI_cleanup(ROI_cluster,score)
     %% here, should be checked for merging, splitting, removing some or removing all
     for i = 1:length(s_test)
       s = s_test(i);
-      ROI_score_test(i) = get_ROI_score(ROI_cluster,score,'compare',s);
+      ROI_score_test(i) = get_ROI_score(ROI_cluster,score,s);
     end
     [ROI_score_new,i_rm] = max(ROI_score_test);
     s_rm = s_test(i_rm);
     
-    if ROI_score_new > ROI_score_old
+    if (ROI_score_new - ROI_score_old) > 0.05
       n_rm = ROI_cluster.list(s_rm,1);
+      
+      if nnz(ROI_cluster.list(:)) > 10
+        plot_ROI_cluster(ROI_cluster,data,s_rm,score)
+        pause(0.1)
+      end
       score.prob(s_rm,:) = NaN;
       score.prob(:,s_rm) = NaN;
       score.fp_corr_oneway(s_rm,:,:) = NaN;

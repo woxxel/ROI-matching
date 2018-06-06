@@ -5,8 +5,8 @@ function [data] = match_loadSessions(nSes,mouse,basePath)
     rot_max = 1;
     rot = linspace(-rot_max,rot_max,10*rot_max+1);
     
-    data(nSes) = struct('shift',[],'rotation',[],'nROI',[],'A',[],'centroid',[],'norm',[]);
-        
+    data(nSes) = struct('shift',[],'rotation',[],'nROI',[],'A',[],'centroid',[],'norm',[],'imSize',[]);
+    mask(nSes) = struct('mask',[]);
     tic
     
     path_bg = sprintf('%s%d/Session01/reduced_MF1_LK1.mat',basePath,mouse);
@@ -73,23 +73,36 @@ function [data] = match_loadSessions(nSes,mouse,basePath)
       data(s).A = sparse(reshape(A_tmp,imSize(1)*imSize(2),data(s).nROI));
       data(s).centroid = zeros(data(s).nROI,2);
       data(s).norm = zeros(data(s).nROI,1);
+      data(s).imSize = imSize;
       
       for n = 1:data(s).nROI
         %% calculate centroid position
         A_tmp_norm = sparse(A_tmp(:,:,n)/sum(data(s).A(:,n)));
-        
         data(s).centroid(n,:) = [sum((1:imSize(1))*A_tmp_norm),sum(A_tmp_norm*(1:imSize(2))')];
         data(s).norm(n) = norm(data(s).A(:,n));
       end
       
-      %% normalize
-%        data(s).A = data(s).A ./ sum(data(s).A);
+      x_pos = data(s).centroid(:,2)+data(s).shift(1);
+      y_pos = data(s).centroid(:,1)+data(s).shift(2);
+      values = min(min(y_pos-1,imSize(1)-y_pos),min(x_pos-1,imSize(2)-x_pos));
+      mask(s).mask = (values < 5);
       
-%        for n = 1:data(s).nROI
-%          data(s).norm(n) = norm(data(s).A(:,n));
-%        end
     end
-    disp('loading done')
+    
+    rm_ct = 0;
+    nROIs = 0;
+    for s=1:nSes
+%        size(data(s).A)
+      data(s).A(:,mask(s).mask) = [];
+      data(s).centroid(mask(s).mask,:) = [];
+      data(s).norm(mask(s).mask) = [];
+%        size(data(s).A)
+      rm_ct = rm_ct + nnz(mask(s).mask);
+      data(s).nROI = nnz(~mask(s).mask);
+      nROIs = nROIs + data(s).nROI;
+    end
+    disp(sprintf('removed %d ROIs due to border proximity',rm_ct))
+    disp(sprintf('loading of %d ROIs done',nROIs))
     toc
     
     savePath = sprintf('%s%d/matching_data.m',basePath,mouse)

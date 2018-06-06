@@ -17,34 +17,43 @@ function [score] = prepare_ROI_score(ROI_cluster,data,xdata)
   score.prob(:) = nan;
   score.fp_corr_oneway(:) = NaN;
   
+  mask_1w(entries) = struct('neurons',struct);
   for i = 1:entries;
     s = y_idx(i);
     l = x_idx(i);
     n = ROI_cluster.list(s,l);
-    for w = 1:width
-      for sm=1:nSes
-        m = ROI_cluster.list(sm,w);
-        if m && sm~=s
-          score.prob(s,sm) = xdata(s,sm).p_same_joint(n,m);
-          
-          score.fp_corr_oneway(s,sm,1) = get_1w_corr(data,[s,n],[sm,m]);
-          score.fp_corr_oneway(s,sm,2) = get_1w_corr(data,[sm,m],[s,n]);
-        end
+    mask_1w(s).neurons(n).idx = find(data(s).A(:,n));
+  end
+    
+  for i = 1:entries;
+    s = y_idx(i);
+    l = x_idx(i);
+    n = ROI_cluster.list(s,l);
+    for j = i+1:entries
+      sm = y_idx(j);
+      l = x_idx(j);
+      m = ROI_cluster.list(sm,l);
+      if sm~=s
+        val_tmp = xdata(s,sm).p_same_joint(n,m);
+        score.prob(s,sm) = val_tmp;
+        score.prob(sm,s) = val_tmp;
+        
+        val_tmp = get_1w_corr(data,mask_1w(s).neurons(n).idx,[s,n],[sm,m]);
+        score.fp_corr_oneway(s,sm,1) = val_tmp;
+        score.fp_corr_oneway(sm,s,2) = val_tmp;
+        
+        val_tmp = get_1w_corr(data,mask_1w(sm).neurons(m).idx,[sm,m],[s,n]);
+        score.fp_corr_oneway(s,sm,2) = val_tmp;
+        score.fp_corr_oneway(sm,s,1) = val_tmp;
       end
     end
   end
-  
 end
 
 
 
 
 
-function [corr_1w] = get_1w_corr(data,N,M)
-  s = N(1);
-  n = N(2);
-  sm = M(1);
-  m = M(2);
-  A_idx = find(data(s).A(:,n));
-  corr_1w = full(dot(data(s).A(A_idx,n),data(sm).A(A_idx,m))/(data(s).norm(n)*norm(data(sm).A(A_idx,m))));
+function [corr_1w] = get_1w_corr(data,A_idx,N,M)
+  corr_1w = full(dot(data(N(1)).A(A_idx,N(2)),data(M(1)).A(A_idx,M(2)))/(data(N(1)).norm(N(2))*norm(data(M(1)).A(A_idx,M(2)))));
 end

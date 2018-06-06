@@ -1,47 +1,25 @@
 
-function [data,xdata,ROI_cluster] = cell_registration(data,xdata,model,para,p_thr,nSes,mouse,basePath)
+function pathData = cell_registration(data,xdata,model,para,p_thr,nSes,mouse,basePath)
 
   %%% -------------------------------------- Cell registration ---------------------------------------
     
     %% implements also check for one-sided spatial correlation
     %% include obtaining an overall spatial filter and an overall centroid (from almost surely matched cells), and match other cells according to that (or get maximum probability, given single ROIs and overall ROI)
     %% include, that cell shape and position can change over time, therefore give higher significance to cells that can be matched from neighbouring sessions!
-%      basePath = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data';
-    basePath = '/media/wollex/AS2/';
-    
-    microns_per_pixel = 530.684/512;
-    
-    model.type = 'joint';
-    
-    sz_model = size(model.p_same_joint);
     
     disp('preparing data...')
     tic
-%      model = 'centroids';
-%      model = 'centroids';
-    
-    nCluster = 0;
-    sesmatch = 0;
-    polygamy = 0;
-    ROI_cluster = struct;
     for s = 1:nSes
       data(s).registered = false(data(s).nROI,1);
       data(s).matched = false(data(s).nROI,1);
       for sm = 1:nSes;
         xdata(s,sm).p_same_dist = sparse(data(s).nROI,data(sm).nROI);
-        switch model.type
-%            case 'dist'
-%            case 'corr'
-%              xdata(s,sm).p_same_corr = sparse(data(s).nROI,data(sm).nROI);
-          case 'joint'
-            xdata(s,sm).p_same_joint = sparse(data(s).nROI,data(sm).nROI);
-        end
+        xdata(s,sm).p_same_joint = sparse(data(s).nROI,data(sm).nROI);
       end
     end
     toc
     
     %% here, all cells that are not surely different are put together in ROI_clusters
-    
     disp('writing data...')
     tic
     for s = 1:nSes
@@ -67,9 +45,10 @@ function [data,xdata,ROI_cluster] = cell_registration(data,xdata,model,para,p_th
     toc
     
     disp('ROI_clustering...')
+    nCluster = 0;
+    ROI_cluster = struct;
     tic
     for s = 1:nSes
-      
       for sm = 1:nSes
         if sm == s
           continue
@@ -107,8 +86,6 @@ function [data,xdata,ROI_cluster] = cell_registration(data,xdata,model,para,p_th
         end
       end
     end
-    
-    
     
     nMatches = [ROI_cluster.ct];
     disp(sprintf('number of ROI_clusters: %d',nCluster))

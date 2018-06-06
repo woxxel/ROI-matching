@@ -10,7 +10,7 @@ function check_ROI_cluster(ROI_cluster,data,xdata,para,p_thr,idx)
   disp(sprintf('displaying ROI_cluster #%d',idx))
   
   ROI_cluster = ROI_cluster(idx);
-  ROI_cluster.list
+  ROI_cluster.list'
 %    ROI_cluster(idx).list = ROI_cluster(idx).list(:,1);
 %    ROI_cluster(idx).list
   
@@ -24,7 +24,7 @@ function check_ROI_cluster(ROI_cluster,data,xdata,para,p_thr,idx)
     ROI_cluster.score
 %      cleanup = true;
     
-    plot_ROI_cluster(ROI_cluster,score,data,0);
+    plot_ROI_cluster(ROI_cluster,data,0,score);
     
 %      while cleanup
 %        ROI_score_old = get_ROI_score(ROI_cluster,score,0);

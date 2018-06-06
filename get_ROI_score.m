@@ -1,6 +1,6 @@
 
 
-function [ROI_score] = get_ROI_score(ROI_cluster,score,mode,s_rm)
+function [ROI_score] = get_ROI_score(ROI_cluster,score,s_rm)
   
   %%% could also take into account:
   %%%   - correlation with direct neighbours
@@ -29,24 +29,14 @@ function [ROI_score] = get_ROI_score(ROI_cluster,score,mode,s_rm)
   
   frac_1w_mean = nanmean(fp_max);
   frac_1w_var = nanvar(fp_max);
+    
+  %    [p_mean frac_1w_mean]
+  %    [p_mean^(1+p_var) frac_1w_mean^(1+frac_1w_var)]  %nanmean(nanmin(score.prob)) 
+    
+  %    ROI_score = 1/3*(p_mean^(1+p_var) + frac_1w_mean^(1+frac_1w_var) + nanmin(score.prob(:)));
+  %    ROI_score = (p_mean^(1+p_var) * frac_1w_mean^(1+frac_1w_var) * nanmin(score.prob(:)))^(1/3);
   
-  if strcmp(mode,'compare')
-    p = 0.15; %% probability-equal of adding or subtracting one ROI (should be ~5% per summand)
-    baseline = 1/p;
-    ROI_delete = ((baseline-nSes)/baseline + N/baseline);
-    
-  %    [p_mean frac_1w_mean ROI_delete]
-  %    [p_mean^(1+p_var) frac_1w_mean^(1+frac_1w_var) ROI_delete]  %nanmean(nanmin(score.prob)) 
-    
-  %    ROI_score = 1/3*(p_mean^(1+p_var) + frac_1w_mean^(1+frac_1w_var) + nanmin(score.prob(:)))*N/nSes;
-  %    ROI_score = (p_mean^(1+p_var) * frac_1w_mean^(1+frac_1w_var) * nanmin(score.prob(:)))^(1/3)*N/nSes;
-    
-    ROI_score = 1/4*(p_mean^(1+p_var) + 2*frac_1w_mean^(1+frac_1w_var) + ROI_delete);
+  ROI_score = 1/3*(p_mean^(1+p_var) + 2*frac_1w_mean^(1+frac_1w_var));
   
-%    disp(sprintf('s: %d ROI score: %6.4g',s_rm(1), ROI_score))
-  elseif strcmp(mode,'final')
-    ROI_score = 1/3*(p_mean^(1+p_var) + 2*frac_1w_mean^(1+frac_1w_var));
-  end
-    
 
 end
