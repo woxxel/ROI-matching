@@ -1,10 +1,11 @@
 
 
-function [score] = prepare_ROI_score(ROI_cluster,data,xdata)
+%  function [score] = prepare_ROI_score(ROI_cluster,data,xdata)
+function [score] = prepare_ROI_score(ROI_cluster,xdata)
   
   nSes = size(ROI_cluster.list,1);
-  width= size(ROI_cluster.list,2);
-  N = nnz(sum(ROI_cluster.list,2));
+%    width= size(ROI_cluster.list,2);
+%    N = nnz(sum(ROI_cluster.list,2));
   
   [y_idx x_idx] = find(ROI_cluster.list);
   entries = length(y_idx);
@@ -12,17 +13,17 @@ function [score] = prepare_ROI_score(ROI_cluster,data,xdata)
   score = struct;
   
   score.prob = zeros(nSes,nSes);
-  score.fp_corr_oneway = zeros(nSes,nSes,2);
+%    score.fp_corr_oneway = zeros(nSes,nSes,2);
   
   score.prob(:) = nan;
-  score.fp_corr_oneway(:) = NaN;
+%    score.fp_corr_oneway(:) = NaN;
   
-  mask_1w(entries) = struct('neurons',struct);
+%    mask_1w(entries) = struct('neurons',struct);
   for i = 1:entries;
     s = y_idx(i);
     l = x_idx(i);
     n = ROI_cluster.list(s,l);
-    mask_1w(s).neurons(n).idx = find(data(s).A(:,n));
+%      mask_1w(s).neurons(n).idx = find(data(s).A(:,n));
   end
     
   for i = 1:entries;
@@ -38,13 +39,13 @@ function [score] = prepare_ROI_score(ROI_cluster,data,xdata)
         score.prob(s,sm) = val_tmp;
         score.prob(sm,s) = val_tmp;
         
-        val_tmp = get_1w_corr(data,mask_1w(s).neurons(n).idx,[s,n],[sm,m]);
-        score.fp_corr_oneway(s,sm,1) = val_tmp;
-        score.fp_corr_oneway(sm,s,2) = val_tmp;
+%          val_tmp = get_1w_corr(data,mask_1w(s).neurons(n).idx,[s,n],[sm,m]);
+%          score.fp_corr_oneway(s,sm,1) = val_tmp;
+%          score.fp_corr_oneway(sm,s,2) = val_tmp;
         
-        val_tmp = get_1w_corr(data,mask_1w(sm).neurons(m).idx,[sm,m],[s,n]);
-        score.fp_corr_oneway(s,sm,2) = val_tmp;
-        score.fp_corr_oneway(sm,s,1) = val_tmp;
+%          val_tmp = get_1w_corr(data,mask_1w(sm).neurons(m).idx,[sm,m],[s,n]);
+%          score.fp_corr_oneway(s,sm,2) = val_tmp;
+%          score.fp_corr_oneway(sm,s,1) = val_tmp;
       end
     end
   end

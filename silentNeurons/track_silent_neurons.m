@@ -14,7 +14,7 @@
 
 
 
-function gap_filling(data,ROI_cluster,threshold,method,plt)
+function track_silent_neurons(data,ROI_cluster,threshold,method,plt)
 
 
   margin = 5;
@@ -160,127 +160,61 @@ function gap_filling(data,ROI_cluster,threshold,method,plt)
 %    newData.Astatus = true(c_add_sz);
 %    newData.Astatus(c_add_sz+1:end) = false;  
 %      %% calculate correlation of added ROIs with sorted out ones - no need, I'm trying to get better ones anyway (and doesn't seem super correlated anyway)
+  
+  
+  %%% find number / fraction of highly correlated pixels and plot vs fitness.
+  %% high fitness, low corr -> sure silent
+  %% low fitness, low corr -> sure active
+  %% low fitness, high corr -> silent, but tainted!
+  
+  nam = '/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/245/Session01/images/ImagingData_MF1_LK1.h5';
+  Y = read_file_crop(nam,[1,512;1,512]);
+  size(Y)
+  
+  disp('reading done')
+%    if ~plt
+  disp('now fill!')
+  tic
+  options = struct('N_samples_exc',6,'robust_std',0);
 
-
-  if ~plt
-    disp('now fill!')
+  fitness_act = zeros(length(n_good),1);
+  fitness_silent = zeros(length(c_add),1);
+  
+  for i=1:length(c_add)
+    c = c_add(i);
     
-    for c=c_add
-  %      c = c_add(randi(length(c_add)))
-  %      c = 889;
-      c
-  %      figure
-  %      imagesc(ROI_cluster(c).A_cluster)
-  %      xlim([ROI_cluster(c).extents(2,1),ROI_cluster(c).extents(2,2)])
-  %      ylim([ROI_cluster(c).extents(1,1),ROI_cluster(c).extents(1,2)])
-      
-      %%% here, sort out out-of-extent ROIs already and mark the "new" ones, that are completely enclosed (get idx)
-      %%% take care, that indices remain valid (CaImAn just removes non-interesting ROIs)
-  %      newData.Astatus
-      
-      A = struct;
-      A.extents = ROI_cluster(c).extents;
-      
-      A.footprint = zeros(A.extents(1,2)-A.extents(1,1)+1,A.extents(2,2)-A.extents(2,1)+1,1);
-      d = size(A.footprint);
-      A.total = zeros(A.extents(1,2)-A.extents(1,1)+1,A.extents(2,2)-A.extents(2,1)+1);
-      A.ct = 0;
-      for n=1:size(newData.A,2)
-        A_tmp = reshape(newData.A(:,n),data(1).imSize(1),data(1).imSize(2));
-        A_tmp = A_tmp(A.extents(1,1):A.extents(1,2),A.extents(2,1):A.extents(2,2));
-        if nnz(A_tmp)
-          A.ct = A.ct + 1;
-          A.footprint(:,:,A.ct) = A_tmp;
-          A.centroid(A.ct,:) = newData.centroid(n,:);
-          A.total = A.total + A_tmp;
-          
-          if nnz(A_tmp) == nnz(newData.A(:,n)) && newData.status(n)==1
-            A.status(A.ct) = 2;
-          else
-            A.status(A.ct) = newData.status(n);
-          end
-        end
-      end
-      
-      [A_out, C_out, status] = run_CNMF_fill('',A);
-      inside = sum(sum(A.footprint));
-  %      inside = inside(status);
-      
-      disp('CNMF done')
-      status(find(A.status==2))
-      if status(find(A.status==2))
-        
-        load('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/884/Session01/reduced_MF1_LK1.mat','max_im')
-        
-        figure('position',[300 300 1200 900])
-        subplot(2,2,1)
-        %% plot of input
-        hold on
-        imagesc(max_im)
-        for k=1:A.ct
-          A_tmp = zeros(data(1).imSize(1),data(1).imSize(2));
-          A_tmp(A.extents(1,1):A.extents(1,2),A.extents(2,1):A.extents(2,2)) = A.footprint(:,:,k);
-          if A.status(k)
-            contour(A_tmp, [0.1 0.1]*max(A_tmp(:)), 'Color','y')
-          else
-            contour(A_tmp, [0.1 0.1]*max(A_tmp(:)), 'Color','g')
-          end
-        end
-        hold off
-        xlim([A.extents(2,1),A.extents(2,2)])
-        ylim([A.extents(1,1),A.extents(1,2)])
-        
-        
-        subplot(2,2,2)
-        %% plot of output
-        hold on
-        imagesc(max_im)
-        for k=1:size(A_out,2)
-          A_tmp = zeros(data(1).imSize(1),data(1).imSize(2));
-          A_tmp(A.extents(1,1):A.extents(1,2),A.extents(2,1):A.extents(2,2)) = reshape(A_out(:,k),d(1),d(2));
-          if status(k) && A.status(k)
-            contour(A_tmp, [0.1 0.1]*max(A_tmp(:)), 'Color','y')
-          else
-            contour(A_tmp, [0.1 0.1]*max(A_tmp(:)), 'Color','g')
-          end
-        end
-        hold off
-        xlim([A.extents(2,1),A.extents(2,2)])
-        ylim([A.extents(1,1),A.extents(1,2)])
-        
-        i_ct = 0;
-    %      status
-    %      find(status)
-        for i = find(status)'
-          i_ct = i_ct + 1;
-          
-          subplot(2*sum(status),1,sum(status)+i_ct)
-    %        size(C_out)
-    %        i
-          if inside(i)>0.95 && A.status(i)
-    %          if size(C_out,1)==1
-    %            plot(C_out(:),'k')
-    %          else
-              plot(C_out(i_ct,:),'k')
-    %          end
-          else
-    %          if size(C_out,1)==1
-    %            plot(C_out(:),'b')
-    %          else
-              plot(C_out(i_ct,:),'b')
-    %          end
-          end
-        end
-        
-        pause(0.01)
-      end
-      %%% preprocess:             should be done (yes!): noise estimation, time constants, etc...
-      %%% greedy ROI init:        skip
-      %%% refinement with HALS:   do not skip
-      %%% then, go in CNMF.fit!    
-      %%% obtain only the ROIs which are completely represented and get only the ones which had to be newly inferred
+    Y_tmp = double(Y(ROI_cluster(c).extents(1,1):ROI_cluster(c).extents(1,2),ROI_cluster(c).extents(2,1):ROI_cluster(c).extents(2,2),:));
+    A_tmp = ROI_cluster(c).A_cluster(ROI_cluster(c).extents(1,1):ROI_cluster(c).extents(1,2),ROI_cluster(c).extents(2,1):ROI_cluster(c).extents(2,2));
+    C = zeros(1,size(Y,3));
+    for t=1:size(Y,3)
+      C(t) = sum(sum(A_tmp.*Y_tmp(:,:,t)));
     end
+    
+    fitness_silent(i) = compute_event_exceptionality(C,options.N_samples_exc,options.robust_std);
   end
+  
+  for i=1:length(n_good)
+    c = n_good(i);
+    
+    Y_tmp = double(Y(ROI_cluster(c).extents(1,1):ROI_cluster(c).extents(1,2),ROI_cluster(c).extents(2,1):ROI_cluster(c).extents(2,2),:));
+    A_tmp = ROI_cluster(c).A_cluster(ROI_cluster(c).extents(1,1):ROI_cluster(c).extents(1,2),ROI_cluster(c).extents(2,1):ROI_cluster(c).extents(2,2));
+    C = zeros(1,size(Y,3));
+    for t=1:size(Y,3)
+      C(t) = sum(sum(A_tmp.*Y_tmp(:,:,t)));
+    end
+    
+    fitness_act(i) = compute_event_exceptionality(C,options.N_samples_exc,options.robust_std);
+  end
+  
+  toc
+  fitness_silent(fitness_silent==-inf) = -300;
+  fitness_act(fitness_act==-inf) = -350;
+  
+  figure
+  hold on
+  histogram(fitness_act,linspace(-350,0,100),'FaceColor','r')
+  histogram(fitness_silent,linspace(-350,0,100),'FaceColor','b')
+  hold off
     
   
   

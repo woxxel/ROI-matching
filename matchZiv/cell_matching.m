@@ -1,23 +1,25 @@
 
 
 
-function [ROI_cluster_final,ROI_data] = cell_matching(basePath,mouse,p_thr)
-    
-    disp('loading data from file...')
-    tic
-    pathData = sprintf('%s%d/cluster_registered.mat',basePath,mouse);
-    data = load(pathData);
-    ROI_cluster = data.ROI_cluster;
-    ROI_data = data.data;
-    ROI_xdata = data.xdata;
-    disp('...done')
-    toc
+%  function [ROI_cluster_final,ROI_data] = cell_matching(basePath,mouse,p_thr)
+%      
+%      disp('loading data from file...')
+%      tic
+%      pathData = sprintf('%s%d/cluster_registered.mat',basePath,mouse);
+%      data = load(pathData);
+%      ROI_cluster = data.ROI_cluster;
+%      ROI_data = data.data;
+%      ROI_xdata = data.xdata;
+%      disp('...done')
+%      toc
+
+
+function [ROI_cluster_final,ROI_data] = cell_matching(ROI_data,ROI_xdata,ROI_cluster,p_thr)
     
     nSes = size(ROI_cluster(1).list,1);
     
     mode = 'threshold';
 %      mode = 'other';
-    
     
     %% now, go through all clusters and assign surely matching ROIs to each other (p_same>0.95)
     %%% here, implementing footprints in the matching process should help/improve the results quite a bit
