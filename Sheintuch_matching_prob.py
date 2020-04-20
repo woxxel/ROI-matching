@@ -1,5 +1,6 @@
-import sys, cv2, math, time, warnings, logging
+import os, sys, cv2, math, time, warnings, logging
 from tqdm import *
+from itertools import chain
 import numpy as np
 from scipy.io import loadmat
 import scipy as sp
@@ -19,7 +20,7 @@ warnings.filterwarnings("ignore")
 
 class Sheintuch_matching:
   
-  def __init__(self,basePath,mouse,sessions,SNR_thr=2.,r_thr=0.0,d_thr=12,nbins=50,qtl=[0.05,0.95],use_kde=True):
+  def __init__(self,basePath,mouse,sessions,footprints_file='results_postSilent.mat',SNR_thr=2.,r_thr=0.0,d_thr=12,nbins=50,qtl=[0.05,0.95],use_kde=True):
     ## build histograms:
     # nearest neighbour / others
     # distance & footprint correlation 
@@ -27,9 +28,9 @@ class Sheintuch_matching:
     
     print('shifted vs unshifted version')
     print('matching assessment (how to? from Sheintuch)')
-    
     self.para = {'pathMouse': pathcat([basePath,mouse]),
-                 'sessions':  sessions,
+                 'sessions':  list(chain.from_iterable(sessions)) if (type(sessions[0]) is range) else list(chain(sessions)),
+                 'fp_file':   footprints_file,
                  'nbins':     nbins,
                  'd_thr':     d_thr,
                  'qtl':       qtl,
@@ -39,7 +40,7 @@ class Sheintuch_matching:
                  'r_thr':     r_thr,
                  'use_kde':   use_kde}
     
-    self.nS = len(sessions)
+    self.nS = len(list(self.para['sessions']))
     
     self.data = {'nA':                np.zeros(self.nS,'int'),
                  'cm':                {},
@@ -72,18 +73,18 @@ class Sheintuch_matching:
                                      'kde':     {}}
                   }
   
-  def load(self):
-    pathLd = pathcat([self.para['pathMouse'],'Sheintuch_model.pkl'])
+  def load_model(self):
+    pathLd = pathcat([self.para['pathMouse'],'matching/Sheintuch_model_%s.pkl'%os.path.splitext(self.para['fp_file'])[0]])
     results = pickleData([],pathLd,'load')
     for key in results.keys():
       self.model[key] = results[key]
     self.para['nbins'] = self.model['p_same']['joint'].shape[0]
   
-  def run_analysis(self):
+  def run_analysis(self,save_results=False):
     self.progress = tqdm(zip(self.para['sessions'],range(self.nS)),total=self.nS)
     for (s0,s) in self.progress:
       
-      self.A2 = self.load_footprints(s0,'results_postSilent.mat')
+      self.A2 = self.load_footprints(s0)
       
       if s>0:
         self.progress.set_description('Aligning data from Session %d'%s0)
@@ -95,23 +96,28 @@ class Sheintuch_matching:
       
       if s>0:
         self.progress.set_description('Calculate statistics for Session %d'%s0)
-        self.calculate_statistics(self.A_ref,self.A2,s)      # calculating distances and footprint correlations
+        self.calculate_statistics(self.A_ref,self.A2,s)       # calculating distances and footprint correlations
       
       if self.para['use_kde']:
         self.progress.set_description('Calculate kernel density for Session %d'%s0)
-        self.position_kde(self.A2,s,self.para['qtl'])     # build kernel
+        self.position_kde(self.A2,s,self.para['qtl'])         # build kernel
       
       if s>0:
         self.progress.set_description('Update model with data from Session %d'%s0)
         self.update_joint_model(s,self.para['use_kde'])
         
       self.A_ref = self.A2.copy()
+    
+    self.fit_model()
+    
+    if save_results:
+      self.save_model()
   
   
   def run_registration(self, p_thr=0.05, plot_results=False, save_results=False, save_suffix=''):
     
-    self.progress = tqdm(zip(self.para['sessions'][1:],range(1,self.nS)),total=self.nS)
-    self.A0 = self.load_footprints(self.para['sessions'][0],'results_postSilent.mat')
+    self.progress = tqdm(zip(self.para['sessions'][1:],range(1,self.nS)),total=self.nS,leave=False)
+    self.A0 = self.load_footprints(self.para['sessions'][0])
     self.A_ref = self.A0.copy()
     self.data['nA'][0] = self.A_ref.shape[1]
     self.data['cm'][0] = com(self.A0,self.para['dims'][0],self.para['dims'][1]) * self.para['pxtomu']
@@ -126,7 +132,7 @@ class Sheintuch_matching:
       self.nA_ref = self.A_ref.shape[1]
       self.cm_ref = com(self.A_ref,self.para['dims'][0],self.para['dims'][1]) * self.para['pxtomu']
       
-      self.A2 = self.load_footprints(s0,'results_postSilent.mat')
+      self.A2 = self.load_footprints(s0)
       self.progress.set_description('A union size: %d, Aligning data from Session %d'%(self.nA_ref,s0))
       self.prepare_footprints(A_ref=self.A0)
       
@@ -287,12 +293,16 @@ class Sheintuch_matching:
     return matches, p_matched
   
   
-  def load_footprints(self,s,fileName):
+  def load_footprints(self,s):
     
-    pathData = pathcat([self.para['pathMouse'],'Session%02d'%s,fileName])
-    ld = loadmat(pathData,variable_names=['A','idx_evaluate','SNR','r_values'],squeeze_me=True)
-    idxes = (ld['SNR']>self.para['SNR_thr']) & (ld['r_values']>self.para['r_thr'])
-    return ld['A'][:,idxes]
+    pathData = pathcat([self.para['pathMouse'],'Session%02d'%s,self.para['fp_file']])
+    try:
+      ld = loadmat(pathData,variable_names=['A','idx_evaluate','SNR','r_values'],squeeze_me=True)
+      idxes = (ld['SNR']>self.para['SNR_thr']) & (ld['r_values']>self.para['r_thr'])
+      return ld['A'][:,idxes]
+    except:
+      ld = loadmat(pathData,variable_names=['A'],squeeze_me=True)
+      return ld['A']
   
   
   def prepare_footprints(self,A_ref=None,align_flag=True,use_opt_flow=True,max_thr=0.001):
@@ -338,13 +348,13 @@ class Sheintuch_matching:
     
     idx_NN = np.nanargmin(self.session_data['D_ROIs'],axis=1)
     self.session_data['nearest_neighbour'][range(nA_ref),idx_NN] = True
-    for i in tqdm(range(nA_ref),desc='calculating footprint correlation of %d neurons'%nA_ref):
+    for i in tqdm(range(nA_ref),desc='calculating footprint correlation of %d neurons'%nA_ref,leave=False):
       for j in np.where(self.session_data['D_ROIs'][i,:]<self.para['d_thr'])[0]:
         if self.A_idx[j]:
           try:
             self.session_data['fp_corr'][i,j], shift = calculate_img_correlation(A1[:,i],A2[:,j],crop=True,shift=True,binary=binary)
           except:
-            print('correlation calculation failed for neurons [%d,%d]'%(i,j))
+            tqdm.write('correlation calculation failed for neurons [%d,%d]'%(i,j),end='')
     self.session_data['fp_corr'].tocsc()
     
   
@@ -364,7 +374,7 @@ class Sheintuch_matching:
     D_ROIs = self.session_data['D_ROIs'][idxes,:][ROI_close]
     fp_corr = self.session_data['fp_corr'][idxes,:][ROI_close].toarray()
     
-    for i in tqdm(range(self.para['nbins']),desc='updating joint model'):
+    for i in tqdm(range(self.para['nbins']),desc='updating joint model',leave=False):
       idx_dist = (D_ROIs >= distance_arr[i]) & (D_ROIs < distance_arr[i+1])
       
       for j in range(self.para['nbins']):
@@ -925,7 +935,7 @@ class Sheintuch_matching:
         #results['cm'][idx_c,s,:] = self.data['cm'][s][idx_c,:]
       
     
-    pathSv = pathcat([self.para['pathMouse'],'matching/Sheintuch_registration%s.pkl'%suffix])
+    pathSv = pathcat([self.para['pathMouse'],'matching/Sheintuch_registration_%s%s.pkl'%(os.path.splitext(self.para['fp_file'])[0],suffix)])
     pickleData(results,pathSv,'save')
   
   def load_registration(self,suffix=''):
@@ -934,24 +944,24 @@ class Sheintuch_matching:
     return pickleData([],pathLd,'load')
     
   
-  def save_model(self,mode='model'):
+  def save_model(self):
     
-    if mode=='model':
-      pathSv = pathcat([self.para['pathMouse'],'Sheintuch_model.pkl'])
+    #if mode=='model':
+    pathSv = pathcat([self.para['pathMouse'],'matching/Sheintuch_model_%s.pkl'%os.path.splitext(self.para['fp_file'])[0]])
+    
+    results = {}
+    for key in ['p_same','fit_parameter','pdf','counts']:
+      results[key] = self.model[key]
+    pickleData(results,pathSv,'save')
+    #if mode=='data':
+      #pathSv = pathcat([self.para['pathMouse'],'Sheintuch_data.pkl'])
       
-      results = {}
-      for key in ['p_same','fit_parameter','pdf','counts']:
-        results[key] = self.model[key]
-      pickleData(results,pathSv,'save')
-    if mode=='data':
-      pathSv = pathcat([self.para['pathMouse'],'Sheintuch_data.pkl'])
-      
-      #dict_sv = {self.model[
-        #}
-      pickleData(self.data,pathSv,'save')
-    if mode=='predictions':
-      pathSv = pathcat([self.para['pathMouse'],'Sheintuch_prediction.pkl'])
-      pickleData(self.predictions,pathSv,'save')
+      ##dict_sv = {self.model[
+        ##}
+      #pickleData(self.data,pathSv,'save')
+    #if mode=='predictions':
+      #pathSv = pathcat([self.para['pathMouse'],'Sheintuch_prediction.pkl'])
+      #pickleData(self.predictions,pathSv,'save')
     
     
 
