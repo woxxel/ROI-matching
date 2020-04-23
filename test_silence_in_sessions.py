@@ -1,7 +1,8 @@
-import cv2, sys, os, time, progressbar, scipy
+import cv2, sys, os, time, scipy
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.sparse
+from tqdm import *
 from scipy.io import loadmat, savemat
 from utils import pathcat, find_modes, pickleData, com, get_shift_and_flow
 
@@ -19,16 +20,14 @@ from build_PC_cluster import *
 
 ### import packages from CNMF, etc
 
-
-
 class test_silence_in_sessions:
   
-  def __init__(self,basePath,mouse,nSes):
+  def __init__(self,basePath,mouse,nSes,session_classification=None):
     
     #pathMouse = pathcat([basePath,mouse])
     self.cluster = cluster(basePath,mouse,nSes)
     self.cluster.load([True,False,True,False,False])
-    self.cluster.session_classification([4,87])
+    self.cluster.session_classification(sessions=session_classification)
     self.cluster.cluster_classification()
     self.dims = self.cluster.meta['dims']
     
@@ -114,9 +113,9 @@ class test_silence_in_sessions:
     s_load = np.unique(s_ref[~np.isnan(s_ref)])
     
     print('loading footprints...')
-    bar = progressbar.ProgressBar(maxval=len(s_load),widgets=[progressbar.Timer(),' / ',progressbar.ETA(),progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage()])
-    bar.start()
-    for (s_ld,i) in zip(s_load.astype('int'),range(len(s_load))):
+    
+    progress = tqdm(zip(s_load.astype('int'),range(len(s_load))),total=len(s_load))
+    for (s_ld,i) in progress:
       
       pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(s_ld+1)])
       pathData = pathcat([pathSession,'results_OnACID.mat'])
@@ -124,7 +123,7 @@ class test_silence_in_sessions:
       
       A_tmp = ld['A'].tocsc()
       
-      (x_shift,y_shift),flow,(x_grid,y_grid) = get_shift_and_flow(self.dataIn['A'],A_tmp,dims,projection=1)
+      (x_shift,y_shift),flow,(x_grid,y_grid) = get_shift_and_flow(self.dataIn['A'],A_tmp,dims,projection=1,plot_bool=False)
         
       x_remap = (x_grid - x_shift + flow[:,:,0])
       y_remap = (y_grid - y_shift + flow[:,:,1])
@@ -133,10 +132,9 @@ class test_silence_in_sessions:
       
       self.dataIn['A'][:,np.where(s_ref==s_ld)[0]] += scipy.sparse.vstack([a/a.sum() for a in A_tmp.T]).T
       #print('%d neuron footprints taken from session %d'%(A_tmp.shape[1],s_ld+1))
-      bar.update(i)
-    bar.finish()
+      
     
-    max_thr = 0.01
+    max_thr = 0.001
     self.dataIn['A'] = scipy.sparse.vstack([a.multiply(a>(max_thr*a.max()))/a.sum() for a in self.dataIn['A'].T]).T
     
   def prepare_CNMF(self,n_processes):
@@ -152,8 +150,9 @@ class test_silence_in_sessions:
       print("No file here to process :(")
       return
     
-    sv_dir = "/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/tmp"
-    svname = self.pathSession + "results_OnACID.mat"
+    #sv_dir = "/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/tmp"
+    sv_dir = "/home/wollex/Documents/Science/PhD/Data/tmp"
+    #svname = self.pathSession + "results_OnACID.mat"
     #if os.path.exists(svname):
       #print("Processed file already present - skipping")
       #return
@@ -198,7 +197,7 @@ class test_silence_in_sessions:
           c, dview, n_processes = cm.cluster.setup_cluster(backend='local', n_processes=None, single_thread=False)
       else:
           dview=None
-    
+      
       self.fname_memmap = cm.save_memmap([fname], base_name='memmap%s_%d_'%(self.cluster.meta['mouse'],(self.s+1)), save_dir=sv_dir, n_chunks=20, order='C', dview=dview)  # exclude borders
       if n_processes > 1:
           cm.stop_server(dview=dview)      ## restart server to clean up memory
@@ -448,11 +447,8 @@ class test_silence_in_sessions:
     self.dataOut['C_std'] = self.dataOut['C'].std(1)
     self.dataIn['C_std'] = self.dataIn['C'].std(1)
     
-    bar = progressbar.ProgressBar(maxval=nC*3,widgets=[progressbar.Timer(),' / ',progressbar.ETA(),progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage()])
-    bar.start()
     self.data['nu'] = np.zeros(nC)*np.NaN
-    for c in range(nC):
-      bar.update(c)
+    for c in tqdm(range(nC),leave=False):
       if (self.dataOut['S'][c,:]>0).sum():
         spike_nr, md, sd_r = get_spikeNr(self.dataOut['S'][c,self.dataOut['S'][c,:]>0])
       else:
@@ -474,23 +470,18 @@ class test_silence_in_sessions:
     idx_Ain = np.where(self.idxes['in'])[0]
     nC_in = len(idx_Ain)
     steps = int(nC_in/chunks)
-    for i in range(steps+1):
+    for i in tqdm(range(steps+1),leave=False):
       c_start = i*chunks
       c_end = min(nC_in,(i+1)*chunks)
       self.dataOut['A_norm'][idx_Ain[c_start:c_end]] = np.linalg.norm(self.dataOut['A'][:,idx_Ain[c_start:c_end]].toarray(),axis=0)
       self.dataIn['A_norm'][idx_Ain[c_start:c_end]] = np.linalg.norm(self.dataIn['A'][:,idx_Ain[c_start:c_end]].toarray(),axis=0)
-      bar.update(nC+idx_Ain[c_end-1])
     #t_end = time.time()
     #print('Anorm computed - time took: %5.3g'%(t_end-t_start))
-    
-    #bar = progressbar.ProgressBar(maxval=self.cluster.meta['nC'],widgets=[progressbar.Timer(),' / ',progressbar.ETA(),progressbar.Bar('=', '[', ']'), ' ', progressbar.Percentage()])
-    #bar.start()
     
     #if redo | (not hasattr(self,'fp_corr')):
     self.data['corr'] = scipy.sparse.csc_matrix((nC,nC))#np.zeros(nC)*np.NaN
     self.data['fp_corr'] = scipy.sparse.csc_matrix((nC,nC))
-    for c in range(nC):
-      bar.update(nC*2+c)
+    for c in tqdm(range(nC),leave=False):
       
       if self.idxes['previous'][c]:
         self.data['fp_corr'][c,c] = self.dataOut['A'][:,c].multiply(self.dataIn['A'][:,c]).sum()/(self.dataOut['A_norm'][c]*self.dataIn['A_norm'][c])
@@ -506,7 +497,6 @@ class test_silence_in_sessions:
             self.data['corr'][c,cc] = np.cov(self.dataOut['C'][c,:],self.dataIn['C'][cc,:])[0,1]/(self.dataOut['C_std'][c]*self.dataIn['C_std'][cc])
           
     #self.data['fp_corr'].tocsc()
-    bar.finish()
     
   
   def save_results(self,ext='mat'):
@@ -545,8 +535,8 @@ class test_silence_in_sessions:
     
     self.s = s-1
     pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%s])
-    #pathData = pathcat([pathSession,'results_redetect.%s'%ext])
-    pathData = pathcat([pathSession,'results_postSilent.%s'%ext])
+    pathData = pathcat([pathSession,'results_redetect.%s'%ext])
+    #pathData = pathcat([pathSession,'results_postSilent.%s'%ext])
     print('loading data from %s'%pathData)
     if ext == 'mat':
       ld = loadmat(pathData,squeeze_me=True)
