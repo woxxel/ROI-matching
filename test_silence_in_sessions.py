@@ -6,7 +6,7 @@ from tqdm import *
 from scipy.io import loadmat, savemat
 from utils import pathcat, find_modes, pickleData, com, get_shift_and_flow
 
-sys.path.append('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Programs/CaImAn')
+sys.path.append('/home/wollex/Data/Science/PhD/Programs/CaImAn')
 
 import caiman as cm
 from caiman.source_extraction import cnmf as cnmf
@@ -22,17 +22,25 @@ from build_PC_cluster import *
 
 class test_silence_in_sessions:
   
-  def __init__(self,basePath,mouse,nSes,session_classification=None):
+  def __init__(self,basePath,mouse,nSes,session_classification=None,dataSet='OnACID'):
     
     #pathMouse = pathcat([basePath,mouse])
-    self.cluster = cluster(basePath,mouse,nSes)
-    self.cluster.load([True,False,True,False,False])
-    self.cluster.session_classification(sessions=session_classification)
-    self.cluster.cluster_classification()
+    self.dataSet = dataSet
+    self.cluster = cluster(basePath,mouse,nSes,dataSet=dataSet)
+    if (not os.path.exists(self.cluster.meta['svIDs'])) & (not os.path.exists(self.cluster.meta['svActivity'])):
+      self.cluster.allocate_cluster()
+      self.cluster.extend_dicts()
+      self.cluster.get_matching()
+      self.cluster.session_classification(sessions=session_classification)
+      self.cluster.cluster_classification()
+      self.cluster.get_PC_fields()
+      self.cluster.find_PCs()
+    else:
+      self.cluster.load([True,False,True,False,False])
+    
     self.dims = self.cluster.meta['dims']
     
-  def run_all(self,s_process,plt_bool=False):
-    
+  def run_all(self,s_process,n_processes,plt_bool=False):
     
     for s in s_process:
       
@@ -41,15 +49,15 @@ class test_silence_in_sessions:
       t_end = time.time()
       print('### --------- footprints constructed - time took: %5.3fs ---------- ###'%(t_end-t_start))
       
-      self.prepare_CNMF(4)
-      self.run_detection(4,cleanup=True)
+      self.prepare_CNMF(n_processes)
+      self.run_detection(n_processes,cleanup=True)
       t_end = time.time()
       print('### --------- rerun completed - time took: %5.3fs ---------- ###'%(t_end-t_start))
       
-      self.analyze_traces(redo=True)
-      self.save_results('mat')
-      t_end = time.time()
-      print('### --------- analysis and saving completed - time took: %5.3fs ---------- ###'%(t_end-t_start))
+      #self.analyze_traces(redo=True)
+      #self.save_results('mat')
+      #t_end = time.time()
+      #print('### --------- analysis and saving completed - time took: %5.3fs ---------- ###'%(t_end-t_start))
       
       if plt_bool:
         self.analyze_pre_plot(redo=True)
@@ -91,7 +99,7 @@ class test_silence_in_sessions:
     self.dataIn['C'][c_idx,:] = ld['C'][n_idx,:]
     self.dataIn['b'] = ld['b'].T
     self.dataIn['f'] = ld['f'].T
-      
+    print(self.dataIn['A'].shape)
     ## construct footprint of silent cells (interpolation between adjacent sessions?) and adjust for shift & rotation
     s_ref = np.zeros((self.cluster.meta['nC'],2))*np.NaN
     n_ref = np.zeros((self.cluster.meta['nC'],2))*np.NaN
@@ -151,7 +159,7 @@ class test_silence_in_sessions:
       return
     
     #sv_dir = "/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Data/tmp"
-    sv_dir = "/home/wollex/Documents/Science/PhD/Data/tmp"
+    sv_dir = "/home/wollex/Data/Science/PhD/Data/tmp"
     #svname = self.pathSession + "results_OnACID.mat"
     #if os.path.exists(svname):
       #print("Processed file already present - skipping")
@@ -194,13 +202,13 @@ class test_silence_in_sessions:
     if not os.path.exists(self.fname_memmap):
       print("Start writing memmapped file @t = " +  time.ctime())
       if n_processes > 1:
-          c, dview, n_processes = cm.cluster.setup_cluster(backend='local', n_processes=None, single_thread=False)
+          c, self.dview, n_processes = cm.cluster.setup_cluster(backend='local', n_processes=n_processes, single_thread=False)
       else:
-          dview=None
+          self.dview=None
       
-      self.fname_memmap = cm.save_memmap([fname], base_name='memmap%s_%d_'%(self.cluster.meta['mouse'],(self.s+1)), save_dir=sv_dir, n_chunks=20, order='C', dview=dview)  # exclude borders
+      self.fname_memmap = cm.save_memmap([fname], base_name='memmap%s_%d_'%(self.cluster.meta['mouse'],(self.s+1)), save_dir=sv_dir, n_chunks=20, order='C', dview=self.dview)  # exclude borders
       if n_processes > 1:
-          cm.stop_server(dview=dview)      ## restart server to clean up memory
+          cm.stop_server(dview=self.dview)      ## restart server to clean up memory
     #self.preprocessed = False
       
   
@@ -247,11 +255,11 @@ class test_silence_in_sessions:
     self.cnm.update_temporal(Yr)
     print('done!')
     
-    self.cnm.deconvolve()
-    self.cnm.estimates.evaluate_components(Y,self.opts)
+    #self.cnm.deconvolve(optimize_g=5,s_min=0)
+    #self.cnm.estimates.evaluate_components(Y,self.opts)
     
-    if cleanup:
-      os.remove(self.fname_memmap)
+    #if cleanup:
+      #os.remove(self.fname_memmap)
     
     
   ## call cnmf to run 
@@ -294,11 +302,12 @@ class test_silence_in_sessions:
     #plt.pause(1)
     
     #self.cnm.estimates.dims = self.cnm.dims = dims
+    #self.cnm.deconvolve(optimize_g=5,s_min=0)
     self.cnm.estimates.evaluate_components(Y,self.opts)
     
-    self.analyze_traces(redo=True)
-    self.analyze_pre_plot(redo=True)
-    self.plot_analysis()
+    #self.analyze_traces(redo=True)
+    #self.analyze_pre_plot(redo=True)
+    #self.plot_analysis()
     
     
   
@@ -561,7 +570,21 @@ class test_silence_in_sessions:
     self.data = {}
     
     
-  def plot_analysis(self):
+  def plot_analysis(self,SNR_thr=2,r_val_thr=0,CNN_thr=0.8):
+    
+    
+    idx_good = (self.dataOut['SNR']>SNR_thr) & (self.dataOut['r_values']>r_val_thr) & (self.dataOut['CNN']>CNN_thr)
+    idx_bad = ~idx_good
+    
+    self.idxes['active_good'] = self.idxes['previous'] & idx_good
+    self.idxes['active_bad'] = self.idxes['previous'] & idx_bad
+    
+    self.idxes['silent_good'] = ~self.idxes['previous'] & idx_good
+    self.idxes['silent_bad'] = ~self.idxes['previous'] & idx_bad
+    
+    print('active good: %d, \t active bad: %d'%(self.idxes['active_good'].sum(),self.idxes['active_bad'].sum()))
+    print('silent good: %d, \t silent bad: %d'%(self.idxes['silent_good'].sum(),self.idxes['silent_bad'].sum()))
+    
     
     idxs = [self.idxes['active_good'],self.idxes['active_bad'],self.idxes['silent_good'],self.idxes['silent_bad']]
     col_arr = ['k','b','r','g']
