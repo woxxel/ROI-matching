@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 
 class Sheintuch_matching:
   
-  def __init__(self,basePath,mouse,sessions,footprints_file='results_redetect.mat',SNR_thr=2.,r_thr=0.0,d_thr=12,nbins=50,qtl=[0.05,0.95],use_kde=True,model='new'):
+  def __init__(self,basePath,mouse,sessions,dataSet='redetect',SNR_thr=2.,r_thr=0.0,d_thr=12,nbins=100,qtl=[0.05,0.95],use_kde=True,model='new'):
     ## build histograms:
     # nearest neighbour / others
     # distance & footprint correlation 
@@ -30,7 +30,7 @@ class Sheintuch_matching:
     print('matching assessment (how to? from Sheintuch)')
     self.para = {'pathMouse': pathcat([basePath,mouse]),
                  'sessions':  list(chain.from_iterable(sessions)) if (type(sessions[0]) is range) else list(chain(sessions)),
-                 'fp_file':   footprints_file,
+                 'fp_file':   'results_%s.mat'%dataSet,
                  'nbins':     nbins,
                  'd_thr':     d_thr,
                  'qtl':       qtl,
@@ -86,14 +86,21 @@ class Sheintuch_matching:
     print('Done!')
     
   def run_analysis(self,save_results=False,suffix=''):
+    self.s_ref = 0
+    
     self.progress = tqdm(zip(self.para['sessions'],range(self.nS)),total=self.nS)
     for (s0,s) in self.progress:
       
       self.A2 = self.load_footprints(s0)
       
       if s>0:
-        self.progress.set_description('Aligning data from Session %d'%s0)
+        _,_,_,c_max = get_shift_and_flow(self.A_ref,self.A2,self.para['dims'],projection=1,plot_bool=False)
+        self.progress.set_description('Aligning data from Session %d, c=%5.3g'%(s0,c_max))
+        if c_max < 0.3:   ## don't include this session in matching
+          print('skipping session %s (correlation c=%5.3g too low)'%(s0,c_max))
+          continue
         self.prepare_footprints()
+      
       self.A_idx = np.squeeze(np.array((self.A2>0).sum(0)>50,'bool'))
       self.data['nA'][s] = self.A2.shape[1]
         
@@ -114,6 +121,7 @@ class Sheintuch_matching:
         self.update_joint_model(s,self.para['use_kde'])
         
       self.A_ref = self.A2.copy()
+      self.s_ref = s
     
     self.fit_model()
     
@@ -128,6 +136,9 @@ class Sheintuch_matching:
     self.progress = tqdm(zip(self.para['sessions'][1:],range(1,self.nS)),total=self.nS,leave=False)
     self.A0 = self.load_footprints(self.para['sessions'][0])
     self.A_ref = self.A0.copy()
+    A2_ref = self.A_ref.copy()
+    self.s_ref = 0
+    
     self.data['nA'][0] = self.A_ref.shape[1]
     self.data['cm'][0] = com(self.A0,self.para['dims'][0],self.para['dims'][1]) * self.para['pxtomu']
     self.matches = np.zeros((self.data['nA'][0],self.nS))*np.NaN
@@ -143,8 +154,13 @@ class Sheintuch_matching:
       
       self.A2 = self.load_footprints(s0)
       #tqdm.write('Session %d data contains %d neurons'%(s0))
-      self.progress.set_description('A union size: %d, Aligning data from Session %d'%(self.nA_ref,s0))
+      _,_,_,c_max = get_shift_and_flow(A2_ref,self.A2,self.para['dims'],projection=1,plot_bool=False)
+      self.progress.set_description('A union size: %d, Aligning data from Session %d, c=%5.3g'%(self.nA_ref,s0,c_max))
+      
+      if c_max < 0.3:   ## don't include this session in matching
+        continue
       self.prepare_footprints(A_ref=self.A0)
+      
       self.A_idx = np.squeeze(np.array((self.A2>0).sum(0)>50,'bool'))
       
       self.data['nA'][s] = self.A2.shape[1]
@@ -185,6 +201,9 @@ class Sheintuch_matching:
       self.p_matched[matched_ref,s] = p_matched[idx_TP]
       p_same_add = np.zeros((N_add,self.nS))*np.NaN
       self.p_matched = np.vstack([self.p_matched,p_same_add])
+      
+      A2_ref = self.A2.copy()
+      self.s_ref = s
       
     if save_results:
       self.save_registration(suffix=save_suffix)
@@ -333,7 +352,7 @@ class Sheintuch_matching:
     if align_flag:  # first align ROIs from session 2 to the template from session 1
       t_start = time.time()
       
-      (x_shift,y_shift),flow,(x_grid,y_grid) = get_shift_and_flow(A_ref,self.A2,self.para['dims'],projection=1,plot_bool=False)
+      (x_shift,y_shift),flow,(x_grid,y_grid),_ = get_shift_and_flow(A_ref,self.A2,self.para['dims'],projection=1,plot_bool=False)
       
       if use_opt_flow:    ## for each pixel, find according position in other map
         x_remap = (x_grid - x_shift + flow[:,:,0])
@@ -351,7 +370,7 @@ class Sheintuch_matching:
   def calculate_statistics(self,A1,A2,s,cm_ref=None,binary='half'):
     
     if cm_ref is None:
-      cm_ref = self.data['cm'][s-1]
+      cm_ref = self.data['cm'][self.s_ref]
     nA_ref = cm_ref.shape[0]
     
     self.session_data['D_ROIs'] = sp.spatial.distance.cdist(cm_ref,self.data['cm'][s])
@@ -387,7 +406,7 @@ class Sheintuch_matching:
     fpcorr_arr = np.linspace(0,1,self.para['nbins']+1)
     
     if use_kde:
-      idxes = self.model['kernel']['idxes'][s-1]
+      idxes = self.model['kernel']['idxes'][self.s_ref]
     else:
       idxes = np.ones(self.session_data['D_ROIs'].shape[0],'bool') 
     
@@ -663,7 +682,7 @@ class Sheintuch_matching:
     self.model['fit_function']['fp_correlation']['nNN_joint'] = functions['gauss']
     
     
-  def plot_model(self,animate=False):
+  def plot_model(self,animate=False,sv=False,suffix=''):
     
     key_counts = 'counts' if self.para['model']=='new' else 'counts_old'
     nbins = self.model[key_counts].shape[0]
@@ -702,10 +721,10 @@ class Sheintuch_matching:
     NN_ratio = cmap(NN_ratio)
     NN_ratio[...,-1] = np.minimum(self.model[key_counts][...,0]/100,1)
     
-    ax_phase.imshow(NN_ratio,extent=[0,1,0,self.para['d_thr']],aspect='auto',clim=[0,0.5],origin='lower')
+    im_ratio = ax_phase.imshow(NN_ratio,extent=[0,1,0,self.para['d_thr']],aspect='auto',clim=[0,0.5],origin='lower')
     nlev = 3
     col = (np.ones((nlev,3)).T*np.linspace(0,1,nlev)).T
-    p_levels = ax_phase.contour(X,Y,self.model['p_same']['joint'],levels=[0.05,0.5,0.95],colors=col)
+    p_levels = ax_phase.contour(X,Y,self.model['p_same']['joint'],levels=[0.05,0.5,0.95],colors='b',linestyles=[':','--','-'])
     ax_phase.set_xlim([0,1])
     ax_phase.set_ylim([0,self.para['d_thr']])
     ax_phase.tick_params(axis='x',which='both',bottom=True,top=True,labelbottom=False,labeltop=True)
@@ -714,6 +733,20 @@ class Sheintuch_matching:
     #ax_phase.xaxis.tick_top()
     ax_phase.set_xlabel('correlation',fontsize=14)
     ax_phase.set_ylabel('distance',fontsize=14)
+    
+    im_ratio.cmap = cmap
+    if self.para['model'] == 'old':
+      cbaxes = plt.axes([0.41, 0.47, 0.07, 0.03])
+      #cbar.ax.set_xlim([0,0.5])
+    else:
+      cbaxes = plt.axes([0.32, 0.2, 0.07, 0.03])
+    cbar = plt.colorbar(im_ratio,cax=cbaxes,orientation='horizontal')
+    #cbar.ax.set_xlabel('NN ratio')
+    cbar.ax.set_xticks([0,0.5])
+    cbar.ax.set_xticklabels(['nNN','NN'])
+    
+    #cbar.ax.set_xticks(np.linspace(0,1,2))
+    #cbar.ax.set_xticklabels(np.linspace(0,1,2))
     
     
     ax_dist = plt.axes([0.05,0.13,0.175,0.4])
@@ -725,8 +758,8 @@ class Sheintuch_matching:
     
     model_distance_all = (fun_wrapper(self.model['fit_function']['distance']['NN'],d_arr,self.model['fit_parameter']['single']['distance']['NN'])*self.model[key_counts][...,1].sum() + fun_wrapper(self.model['fit_function']['distance']['nNN'],d_arr,self.model['fit_parameter']['single']['distance']['nNN'])*self.model[key_counts][...,2].sum())*d_w
     
-    ax_dist.plot(fun_wrapper(self.model['fit_function']['distance']['all'],d_arr,self.model['fit_parameter']['single']['distance']['all'])*self.model[key_counts][...,0].sum()*d_w,d_arr,'k')
-    ax_dist.plot(model_distance_all,d_arr,'k--')
+    ax_dist.plot(fun_wrapper(self.model['fit_function']['distance']['all'],d_arr,self.model['fit_parameter']['single']['distance']['all'])*self.model[key_counts][...,0].sum()*d_w,d_arr,'k:')
+    ax_dist.plot(model_distance_all,d_arr,'k')
     
     ax_dist.plot(fun_wrapper(self.model['fit_function']['distance']['NN'],d_arr,self.model['fit_parameter']['single']['distance']['all'][1:3])*self.model['fit_parameter']['single']['distance']['all'][0]*self.model[key_counts][...,0].sum()*d_w,d_arr,'g')
     ax_dist.plot(fun_wrapper(self.model['fit_function']['distance']['NN'],d_arr,self.model['fit_parameter']['single']['distance']['NN'])*self.model[key_counts][...,1].sum()*d_w,d_arr,'g:')
@@ -764,23 +797,29 @@ class Sheintuch_matching:
     
     #ax_parameter = 
     p_steps, rates = self.RoC(100)
-    idx = np.where(p_steps == 0.05)[0]
-  
-    ax_cum = plt.axes([0.63,0.63,0.35,0.35])
-    ax_cum.plot([0,1],[0.05,0.05],'grey',linestyle='--')
-    ax_cum.plot([0.5,1],[0.95,0.95],'grey',linestyle='--')
     
-    ax_cum.plot(rates['cumfrac']['joint'],p_steps[:-1],'grey',label='Joint')
-    ax_cum.plot(rates['cumfrac']['distance'],p_steps[:-1],'k',label='Distance')
-    ax_cum.plot(rates['cumfrac']['fp_correlation'],p_steps[:-1],'lightgrey',label='Correlation')
-    ax_cum.set_ylabel('$p_{same}$',fontsize=14)
-    ax_cum.set_xlabel('cumulative fraction',fontsize=14)
-    #ax_cum.legend(fontsize=10,frameon=False)
+    ax_cum = plt.axes([0.63,0.63,0.35,0.35])
+    
     uncertain = {}
     idx_low = np.where(p_steps>0.05)[0][0]
     idx_high = np.where(p_steps<0.95)[0][-1]
     for key in rates['cumfrac'].keys():
+      
+      if (rates['cumfrac'][key][idx_low]>0.01) & (rates['cumfrac'][key][idx_high]<0.99):
+        ax_cum.fill_between([rates['cumfrac'][key][idx_low],rates['cumfrac'][key][idx_high]],[0,0],[1,1],facecolor='y',alpha=0.5)
       uncertain[key] = (rates['cumfrac'][key][idx_high] - rates['cumfrac'][key][idx_low])#/(1-rates['cumfrac'][key][idx_high+1])
+      
+    ax_cum.plot([0,1],[0.05,0.05],'b',linestyle=':')
+    ax_cum.plot([0.5,1],[0.95,0.95],'b',linestyle='-')
+    
+    ax_cum.plot(rates['cumfrac']['joint'],p_steps[:-1],'grey',label='Joint')
+    ax_cum.plot(rates['cumfrac']['distance'],p_steps[:-1],'k',label='Distance')
+    if self.para['model']=='old':
+      ax_cum.plot(rates['cumfrac']['fp_correlation'],p_steps[:-1],'lightgrey',label='Correlation')
+    ax_cum.set_ylabel('$p_{same}$',fontsize=14)
+    ax_cum.set_xlabel('cumulative fraction',fontsize=14)
+    #ax_cum.legend(fontsize=10,frameon=False)
+    
     
     ax_uncertain = plt.axes([0.7,0.8,0.075,0.1])
     ax_uncertain.bar(2,uncertain['distance'],facecolor='k')
@@ -794,7 +833,7 @@ class Sheintuch_matching:
       ax_uncertain.set_xlim([1.5,3.5])
       ax_uncertain.set_xticks(range(2,4))
       ax_uncertain.set_xticklabels(['Dist.','Joint'],rotation=60,fontsize=10)
-    ax_uncertain.set_ylim([0,0.1])
+    ax_uncertain.set_ylim([0,0.2])
     ax_uncertain.spines['right'].set_visible(False)
     ax_uncertain.spines['top'].set_visible(False)
     ax_uncertain.set_title('uncertain fraction',fontsize=10)
@@ -812,36 +851,45 @@ class Sheintuch_matching:
     #ax_rates.set_xlabel('rate')
     #ax_rates.set_ylabel('$p_{same}$')
     
-    ax_RoC = plt.axes([0.63,0.13,0.35,0.3])
+    idx = np.where(p_steps == 0.5)[0]
+    
+    ax_RoC = plt.axes([0.63,0.13,0.15,0.3])
     ax_RoC.plot(rates['fp']['joint'],rates['tp']['joint'],'grey',label='Joint')
     ax_RoC.plot(rates['fp']['distance'],rates['tp']['distance'],'k',label='Distance')
-    ax_RoC.plot(rates['fp']['fp_correlation'],rates['tp']['fp_correlation'],'lightgrey',label='Correlation')
+    if self.para['model']=='old':
+      ax_RoC.plot(rates['fp']['fp_correlation'],rates['tp']['fp_correlation'],'lightgrey',label='Correlation')
     ax_RoC.plot(rates['fp']['joint'][idx],rates['tp']['joint'][idx],'kx')
     ax_RoC.plot(rates['fp']['distance'][idx],rates['tp']['distance'][idx],'kx')
-    ax_RoC.plot(rates['fp']['fp_correlation'][idx],rates['tp']['fp_correlation'][idx],'kx')
+    if self.para['model']=='old':
+      ax_RoC.plot(rates['fp']['fp_correlation'][idx],rates['tp']['fp_correlation'][idx],'kx')
     ax_RoC.set_ylabel('true positive',fontsize=14)
     ax_RoC.set_xlabel('false positive',fontsize=14)
     ax_RoC.spines['right'].set_visible(False)
-    ax_RoC.set_xlim([0,0.5])
-    ax_RoC.set_ylim([0,1])
+    ax_RoC.set_xlim([0,0.1])
+    ax_RoC.set_ylim([0.6,1])
     
     
-    ax_fp = plt.axes([0.88,0.17,0.075,0.1])
+    ax_fp = plt.axes([0.9,0.13,0.075,0.1])
     ax_fp.bar(2,rates['fp']['distance'][idx],facecolor='k')
     ax_fp.bar(3,rates['fp']['joint'][idx],facecolor='grey')
     ax_fp.set_xticks([])
+    
     if self.para['model']=='old':
       ax_fp.bar(1,rates['fp']['fp_correlation'][idx],facecolor='lightgrey')
       ax_fp.set_xlim([0.5,3.5])
+      ax_fp.set_xticks(range(1,4))
+      ax_fp.set_xticklabels(['Corr.','Dist.','Joint'],rotation=60,fontsize=10)
     else:
       ax_fp.set_xlim([1.5,3.5])
+      ax_fp.set_xticks(range(2,4))
+      ax_fp.set_xticklabels(['Dist.','Joint'],rotation=60,fontsize=10)
       
     ax_fp.set_ylim([0,0.05])
     ax_fp.spines['right'].set_visible(False)
     ax_fp.spines['top'].set_visible(False)
-    ax_fp.set_title('false positives',fontsize=10)
+    ax_fp.set_ylabel('false pos.',fontsize=10)
     
-    ax_tp = plt.axes([0.72,0.17,0.075,0.1])
+    ax_tp = plt.axes([0.9,0.33,0.075,0.1])
     ax_tp.bar(2,rates['tp']['distance'][idx],facecolor='k')
     ax_tp.bar(3,rates['tp']['joint'][idx],facecolor='grey')
     ax_tp.set_xticks([])
@@ -850,17 +898,18 @@ class Sheintuch_matching:
       ax_tp.set_xlim([0.5,3.5])
     else:
       ax_tp.set_xlim([1.5,3.5])
-    ax_tp.set_ylim([0.8,1])
+    ax_tp.set_ylim([0.7,1])
     ax_tp.spines['right'].set_visible(False)
     ax_tp.spines['top'].set_visible(False)
-    ax_tp.set_ylabel('fraction',fontsize=10)
-    ax_tp.set_title('true positives',fontsize=10)
+    #ax_tp.set_ylabel('fraction',fontsize=10)
+    ax_tp.set_ylabel('true pos.',fontsize=10)
     
     #plt.tight_layout()
     plt.show(block=False)
-    ext = 'png'
-    path = pathcat([self.para['pathMouse'],'Sheintuch_matching_%s.%s'%(self.para['model'],ext)])
-    plt.savefig(path,format=ext,dpi=300)
+    if sv:
+      ext = 'png'
+      path = pathcat([self.para['pathMouse'],'Sheintuch_matching_%s%s.%s'%(self.para['model'],suffix,ext)])
+      plt.savefig(path,format=ext,dpi=300)
     
     #ax_cvc = plt.axes([0.65,0.1,0.2,0.4])
     #idx = self.session_data['fp_corr_max']>0
@@ -1060,7 +1109,6 @@ class Sheintuch_matching:
     
     plt.figure()
     W_NN = self.model[key_counts][...,1].sum() / self.model[key_counts][...,0].sum()
-    print(W_NN)
     #W_NN = 0.5
     W_nNN = 1-W_NN
     plt.subplot(211)
@@ -1195,15 +1243,19 @@ class Sheintuch_matching:
     
   def save_registration(self,suffix=''):
     
+    idx = self.data['nA']>0
     results = {'assignment':self.matches,
                'p_matched':self.p_matched,
                'p_same':self.data['p_same'],
                'nA':self.data['nA']}
     
+    print(results['assignment'].shape)
+    
     results['cm'] = np.zeros(results['assignment'].shape + (2,))
     
-    for s in range(self.nS):
-      idx_c = np.where(~np.isnan(results['assignment'][:,s]))
+    for s in np.where(idx)[0]:
+      print(s)
+      idx_c = np.where(~np.isnan(results['assignment'][:,s]))[0]
       idx_n = results['assignment'][idx_c,s].astype('int')
       if s>0:
         results['p_same'][s] = sp.sparse.csr_matrix(results['p_same'][s])

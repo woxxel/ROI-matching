@@ -1,4 +1,4 @@
-import cv2, imutils, time
+import cv2, time
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats as sstats
@@ -8,7 +8,7 @@ from matplotlib import animation
 from mpl_toolkits.mplot3d import Axes3D
 
 from scipy.io import loadmat
-from utils import fit_plane, z_from_point_normal_plane, rotation_matrix, bootstrap_data, calculate_img_correlation, get_shift_and_flow
+from utils import fit_plane, z_from_point_normal_plane, rotation_matrix, bootstrap_data, calculate_img_correlation, get_shift_and_flow, pathcat
 
 pathPlots = "/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Results/pics/general_plots/"
 
@@ -281,46 +281,28 @@ def plot_correlation_image(pathMouse,session=None):
   
   plt.savefig('%scorrelation_img.png'%pathPlots)
   
-def plot_session_shifts(pathMouse,sessions=None):
+def plot_session_shifts(basePath,mouse,sessions=None,dataSet='OnACID',pltSave=False):
   
-  pathSession1 = '%sSession%02d/results_OnACID.mat' % (pathMouse,sessions[0])
-  ROIs1_ld = loadmat(pathSession1)
+  pathMouse = pathcat([basePath,mouse])
+  pathSession1 = pathcat([pathMouse,'Session%02d/results_%s.mat' % (sessions[0],dataSet)])
+  ROIs1_ld = loadmat(pathSession1,variable_names=['A'])
   
-  pathSession2 = '%sSession%02d/results_OnACID.mat' % (pathMouse,sessions[1])
-  ROIs2_ld = loadmat(pathSession2)
+  pathSession2 = pathcat([pathMouse,'Session%02d/results_%s.mat' % (sessions[1],dataSet)])
+  ROIs2_ld = loadmat(pathSession2,variable_names=['A'])
   
-  Cn = ROIs1_ld['Cn']
-  Cn2 = ROIs2_ld['Cn']
-  Cn -= Cn.min()
-  Cn /= Cn.max()
-  Cn2 -= Cn2.min()
-  Cn2 /= Cn2.max()
-  dims = Cn.shape
+  A1 = ROIs1_ld['A']
+  A2 = ROIs2_ld['A']
+  #dims = Cn.shape
   
-  x_grid, y_grid = np.meshgrid(np.arange(0., dims[1]).astype(
-                np.float32), np.arange(0., dims[0]).astype(np.float32))
+  get_shift_and_flow(A1,A2,plot_bool=True)
+  #Cn2 = cv2.remap(Cn2.astype(np.float32), x_remap, y_remap, cv2.INTER_NEAREST)
   
-  C = np.fft.fftshift(np.real(np.fft.ifft2(np.fft.fft2(Cn) * np.fft.fft2(np.rot90(Cn2,2)))))
+  #plt.figure()
+  #plt.subplot(1,2,1)
+  #plt.imshow(Cn)
+  #plt.subplot(1,2,2)
+  #plt.imshow(Cn2+Cn)
+  #plt.show(block=False)
   
-  #if np.max(C) < 0.1:   ## no proper shift could be found
-    #x_shift = 0
-    #y_shift = 0
-    #raise("no shift could be found")
-  #else:
-  max_pos = np.where(C==np.max(C))
-  x_shift = (max_pos[1] - (dims[1]/2-1)).astype(int)
-  y_shift = (max_pos[0] - (dims[0]/2-1)).astype(int)
-  
-  x_remap = (x_grid - x_shift).astype(np.float32)
-  y_remap = (y_grid - y_shift).astype(np.float32)
-  
-  Cn2 = cv2.remap(Cn2.astype(np.float32), x_remap, y_remap, cv2.INTER_NEAREST)
-  
-  plt.figure()
-  plt.subplot(1,2,1)
-  plt.imshow(Cn)
-  plt.subplot(1,2,2)
-  plt.imshow(Cn2+Cn)
-  plt.show(block=False)
-  
-  plt.savefig('%ssession_shift.png'%pathPlots)
+  if pltSave:
+    plt.savefig('%ssession_shift.png'%pathPlots)

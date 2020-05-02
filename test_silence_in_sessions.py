@@ -44,28 +44,29 @@ class test_silence_in_sessions:
     
     for s in s_process:
       
-      t_start = time.time()
-      self.obtain_footprints(s,transpose=True)
-      t_end = time.time()
-      print('### --------- footprints constructed - time took: %5.3fs ---------- ###'%(t_end-t_start))
-      
-      self.prepare_CNMF(n_processes)
-      self.run_detection(n_processes,cleanup=True)
-      t_end = time.time()
-      print('### --------- rerun completed - time took: %5.3fs ---------- ###'%(t_end-t_start))
-      
-      #self.analyze_traces(redo=True)
-      #self.save_results('mat')
-      #t_end = time.time()
-      #print('### --------- analysis and saving completed - time took: %5.3fs ---------- ###'%(t_end-t_start))
-      
-      if plt_bool:
-        self.analyze_pre_plot(redo=True)
-        self.plot_analysis()
-        plt.close('all')
+      if self.cluster.boolSessions[s]:
+        t_start = time.time()
+        self.obtain_footprints(s)
+        t_end = time.time()
+        print('### --------- footprints constructed - time took: %5.3fs ---------- ###'%(t_end-t_start))
+        
+        self.prepare_CNMF(n_processes)
+        self.run_detection(n_processes,cleanup=True)
+        t_end = time.time()
+        print('### --------- rerun completed - time took: %5.3fs ---------- ###'%(t_end-t_start))
+        
+        self.analyze_traces(redo=True)
+        self.save_results('mat')
+        t_end = time.time()
+        print('### --------- analysis and saving completed - time took: %5.3fs ---------- ###'%(t_end-t_start))
+        
+        if plt_bool:
+          self.analyze_pre_plot(redo=True)
+          self.plot_analysis()
+          plt.close('all')
       
     
-  def obtain_footprints(self,s,max_diff=None,transpose=None):
+  def obtain_footprints(self,s,max_diff=None):
     
     print('Run redetection of "silent" cells on session %d'%(s+1))
     
@@ -76,7 +77,7 @@ class test_silence_in_sessions:
     self.data = {}
     
     ## find silent neurons in session s
-    self.idxes['silent']= np.copy(self.cluster.activity['status'][:,self.s,0])
+    self.idxes['silent']= ~self.cluster.activity['status'][:,self.s,1]
     
     if max_diff is None:
       max_diff = self.cluster.meta['nSes']
@@ -99,7 +100,6 @@ class test_silence_in_sessions:
     self.dataIn['C'][c_idx,:] = ld['C'][n_idx,:]
     self.dataIn['b'] = ld['b'].T
     self.dataIn['f'] = ld['f'].T
-    print(self.dataIn['A'].shape)
     ## construct footprint of silent cells (interpolation between adjacent sessions?) and adjust for shift & rotation
     s_ref = np.zeros((self.cluster.meta['nC'],2))*np.NaN
     n_ref = np.zeros((self.cluster.meta['nC'],2))*np.NaN
@@ -131,7 +131,7 @@ class test_silence_in_sessions:
       
       A_tmp = ld['A'].tocsc()
       
-      (x_shift,y_shift),flow,(x_grid,y_grid) = get_shift_and_flow(self.dataIn['A'],A_tmp,dims,projection=1,plot_bool=False)
+      (x_shift,y_shift),flow,(x_grid,y_grid),_ = get_shift_and_flow(self.dataIn['A'],A_tmp,dims,projection=1,plot_bool=False)
         
       x_remap = (x_grid - x_shift + flow[:,:,0])
       y_remap = (y_grid - y_shift + flow[:,:,1])
@@ -198,15 +198,16 @@ class test_silence_in_sessions:
     
     self.opts = cnmf.params.CNMFParams(params_dict=params_dict)
     
-    self.fname_memmap = pathcat([sv_dir,'memmap_%s_%d_d1_512_d2_512_d3_1_order_C_frames_8989_.mmap'%(self.cluster.meta['mouse'],(self.s+1))])
+    self.fname_memmap = pathcat([sv_dir,'memmap%s_%d__d1_512_d2_512_d3_1_order_C_frames_8989_.mmap'%(self.cluster.meta['mouse'],(self.s+1))])
+    print(self.fname_memmap)
     if not os.path.exists(self.fname_memmap):
       print("Start writing memmapped file @t = " +  time.ctime())
       if n_processes > 1:
-          c, self.dview, n_processes = cm.cluster.setup_cluster(backend='local', n_processes=n_processes, single_thread=False)
+        c, self.dview, n_processes = cm.cluster.setup_cluster(backend='local', n_processes=n_processes, single_thread=False)
       else:
-          self.dview=None
+        self.dview=None
       
-      self.fname_memmap = cm.save_memmap([fname], base_name='memmap%s_%d_'%(self.cluster.meta['mouse'],(self.s+1)), save_dir=sv_dir, n_chunks=20, order='C', dview=self.dview)  # exclude borders
+      self.fname_memmap = cm.save_memmap([fname], base_name='memmap%s_%d_'%(self.cluster.meta['mouse'],(self.s+1)), save_dir=sv_dir, n_chunks=100, order='C', dview=self.dview)  # exclude borders
       if n_processes > 1:
           cm.stop_server(dview=self.dview)      ## restart server to clean up memory
     #self.preprocessed = False
@@ -255,11 +256,11 @@ class test_silence_in_sessions:
     self.cnm.update_temporal(Yr)
     print('done!')
     
-    #self.cnm.deconvolve(optimize_g=5,s_min=0)
-    #self.cnm.estimates.evaluate_components(Y,self.opts)
+    self.cnm.deconvolve(optimize_g=5,s_min=0)
+    self.cnm.estimates.evaluate_components(Y,self.opts)
     
-    #if cleanup:
-      #os.remove(self.fname_memmap)
+    if cleanup:
+      os.remove(self.fname_memmap)
     
     
   ## call cnmf to run 
@@ -302,10 +303,10 @@ class test_silence_in_sessions:
     #plt.pause(1)
     
     #self.cnm.estimates.dims = self.cnm.dims = dims
-    #self.cnm.deconvolve(optimize_g=5,s_min=0)
+    self.cnm.deconvolve(optimize_g=5,s_min=0)
     self.cnm.estimates.evaluate_components(Y,self.opts)
     
-    #self.analyze_traces(redo=True)
+    self.analyze_traces(redo=True)
     #self.analyze_pre_plot(redo=True)
     #self.plot_analysis()
     
@@ -423,15 +424,15 @@ class test_silence_in_sessions:
     ### analyze active neurons: did they maintain same behavior? (correlation > 0.9)
     #self.Cout[self.idxes['in'],:] = np.vstack([Ca/Ca.max() for Ca in self.cnm.estimates.C])
     
-    t_start = time.time()
-    self.dataOut['fitness'] = np.zeros(nC+nC_new)
-    self.dataOut['fitness'][self.idxes['in']], erfc, sd_r, md = compute_event_exceptionality(self.dataOut['C'][self.idxes['in'],:])
-    if nC_new > 0:
-      self.dataOut['fitness'][nC:], erfc, sd_r, md = compute_event_exceptionality(self.dataOut['C'][nC:,:])
+    #t_start = time.time()
+    #self.dataOut['fitness'] = np.zeros(nC+nC_new)
+    #self.dataOut['fitness'][self.idxes['in']], erfc, sd_r, md = compute_event_exceptionality(self.dataOut['C'][self.idxes['in'],:])
+    #if nC_new > 0:
+      #self.dataOut['fitness'][nC:], erfc, sd_r, md = compute_event_exceptionality(self.dataOut['C'][nC:,:])
     #self.fitness[self.fitness<-10**4] = -10**4
     
-    t_end = time.time()
-    print('fitness computed - time took: %5.3g'%(t_end-t_start))
+    #t_end = time.time()
+    #print('fitness computed - time took: %5.3g'%(t_end-t_start))
     
     
     
@@ -527,8 +528,8 @@ class test_silence_in_sessions:
                'idx_evaluate':self.idxes['evaluate'],
                'SNR':self.dataOut['SNR'],
                'r_values':self.dataOut['r_values'],
-               'CNN':self.dataOut['CNN'],
-               'fitness':self.dataOut['fitness']}
+               'CNN':self.dataOut['CNN']}
+               #'fitness':self.dataOut['fitness']}
     
     svPath = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(self.s+1),'results_redetect.%s'%ext])
     if ext == 'mat':
@@ -556,8 +557,8 @@ class test_silence_in_sessions:
                     'S':ld['S'],
                     'SNR':ld['SNR'],
                     'r_values':ld['r_values'],
-                    'CNN':ld['CNN'],
-                    'fitness':ld['fitness']}
+                    'CNN':ld['CNN']}
+                    #'fitness':ld['fitness']}
     
     self.dataIn = {'A':ld['Ain'],
                    #'Cn':ld['Cn'],
