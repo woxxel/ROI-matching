@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib_scalebar.scalebar import ScaleBar
 import scipy as sp
-import sys, os
+import sys, os, time
 from scipy.io import loadmat
 from tqdm import *
 from past.utils import old_div
@@ -13,8 +13,8 @@ import caiman as cm
 
 class CNMF_plots:
   
-  def __init__(self):
-    pathCNMF = '/home/wollex/Data/Science/PhD/Data/tmp/cnmf_results_762_10.pkl'
+  def __init__(self,pathCNMF='/home/wollex/Data/Science/PhD/Data/tmp/cnmf_results_762_10.pkl'):
+    
     ld = pickleData([],pathCNMF,'load')
     self.estimates = ld.estimates
     print(self.estimates)
@@ -36,6 +36,7 @@ class CNMF_plots:
     
   def get_memmap(self,fname,sv_dir):
     
+    self.fname_memmap = fname
     #self.fname_memmap = pathcat([sv_dir,'memmap_%s_%d_'%('raw',1)])
     #if not os.path.exists(self.fname_memmap):
       #self.fname_memmap = cm.save_memmap([fname], base_name=self.fname_memmap, save_dir=sv_dir, n_chunks=200, order='C', dview=None)
@@ -48,8 +49,69 @@ class CNMF_plots:
     #for t in tqdm(range(T-1)):
       #_, self.shift[t,:] = calculate_img_correlation(Y[t,100:400,100:400],Y[t+1,100:400,100:400],dims=(300,300),plot_bool=False)
     
+  
+  def xy_align(self,stacks_to_do):
+    '''{
+    stacks_to_do: range of frames
     
-    
+    Calculates rigid x-y shift for each frame by maximizing correlation
+    between pairs of images recursively.
+    r = running data structure with:
+        .I mean image
+        .n number of frames in mean
+        .T x-y shifts for the frames
+    #max_shift = search radius to maximize correlation
+    Based on:
+    https://scanbox.wordpress.com/2014/03/20/recursive-image-alignment-and-statistics/
+    }'''
+    nStacks = len(stacks_to_do)
+    if nStacks==1:
+      # if only one stack, assign initial values to parameters
+      t_start = time.time()
+      a = np.squeeze(self.Y[stacks_to_do,...])
+      t_end = time.time()
+      print('img loaded, time taken: %5.3g'%(t_end-t_start))
+      r = {'I':       np.squeeze(self.Y[stacks_to_do,...]),
+           'n':       1,
+           'shift':   np.zeros(2)}
+      t_end = time.time()
+      print('img loaded, time taken: %5.3g'%(t_end-t_start))
+    else:
+      # split into two groups and run again recursively
+      #print(stacks_to_do[:nStacks//2])
+      #print(stacks_to_do[nStacks//2:])
+      r_input = self.xy_align(stacks_to_do[:nStacks//2])
+      r_goal = self.xy_align(stacks_to_do[nStacks//2:])
+      
+      r = {'I':[],
+           'n':[],
+           'shift':[]}
+      # use the average of the selected channel to get alignment
+      _,shift = calculate_img_correlation(r_input['I'][50:450,50:450],r_goal['I'][50:450,50:450],dims=(400,400))   ## shift in y,x order
+      shift = shift.astype('int')
+      # shift input image (fill empty spaces with NaN)
+      if (np.abs(shift).sum())>0:
+        tmp = np.zeros(r_input['I'].shape)*np.NaN
+        tmp[max(0,shift[0]):r_input['I'].shape[0]+min(0,shift[0]),
+            max(0,shift[1]):r_input['I'].shape[1]+min(0,shift[1])] = \
+            r_input['I'][-min(0,shift[0]):r_input['I'].shape[0]-max(0,shift[0]),
+                         -min(0,shift[1]):r_input['I'].shape[1]-max(0,shift[1])]
+        r_input['I'] = tmp
+      
+      # combine images, number of stacks and transforms
+      r['I'] = (r_input['n']*r_input['I'] + r_goal['n']*r_goal['I'])/(r_input['n']+r_goal['n'])
+      r['n'] = r_input['n']+r_goal['n']
+      
+      print(shift)
+      #print(np.ones((r_input['shift'].shape[0],1))*shift)
+      #print(r_input['shift'])
+      #print(np.ones((r_input['shift'].shape[0],1))*shift + r_input['shift'])
+      #print(r_goal['shift'])
+      
+      r['shift'] = np.vstack([np.ones((r_input['shift'].shape[0],1))*shift + r_input['shift'] , r_goal['shift']])
+    return r
+      
+      
   def plot(self,nCells=100):
     
     plt.rcParams['font.size'] = 12
