@@ -1,6 +1,8 @@
 import cv2, sys, os, time, scipy
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib_scalebar.scalebar import ScaleBar
 import scipy.sparse
 from tqdm import *
 from scipy.io import loadmat, savemat
@@ -22,31 +24,29 @@ from build_PC_cluster import *
 
 class test_silence_in_sessions:
   
-  def __init__(self,basePath,mouse,nSes,session_classification=None,dataSet='OnACID'):
+  def __init__(self,basePath,mouse,nSes,n_processes=0,session_classification=None,dataSet='OnACID'):
     
     #pathMouse = pathcat([basePath,mouse])
     self.dataSet = dataSet
-    self.cluster = cluster(basePath,mouse,nSes,dataSet=dataSet)
-    if (not os.path.exists(self.cluster.meta['svIDs'])) & (not os.path.exists(self.cluster.meta['svActivity'])):
-      self.cluster.allocate_cluster()
-      self.cluster.extend_dicts()
-      self.cluster.get_matching()
-      self.cluster.session_classification(sessions=session_classification)
-      self.cluster.cluster_classification()
-      self.cluster.get_PC_fields()
-      self.cluster.find_PCs()
-    else:
-      self.cluster.load([True,False,True,False,False])
+    self.cluster = cluster(basePath,mouse,nSes,dataSet=dataSet,s_corr_min=0.3)
+    
+    self.cluster.process_sessions(n_processes=n_processes,reprocess=True)
+    self.cluster.get_IDs()
+    self.cluster.get_stats(n_processes=n_processes,complete=False)
+    
+    #self.cluster.cluster_classification()
+    #self.cluster.get_PC_fields()
+    self.cluster.update_status(complete=False)
     
     self.dims = self.cluster.meta['dims']
     
-  def run_all(self,s_process,n_processes,plt_bool=False):
+  def run_all(self,s_process,n_processes,plt_bool=False,complete_new=False):
     
     for s in s_process:
       
-      if self.cluster.boolSessions[s]:
+      if self.cluster.sessions['bool'][s]:
         t_start = time.time()
-        self.obtain_footprints(s)
+        self.obtain_footprints(s,complete_new=complete_new)
         t_end = time.time()
         print('### --------- footprints constructed - time took: %5.3fs ---------- ###'%(t_end-t_start))
         
@@ -66,7 +66,7 @@ class test_silence_in_sessions:
           plt.close('all')
       
     
-  def obtain_footprints(self,s,max_diff=None):
+  def obtain_footprints(self,s,max_diff=None,complete_new=False):
     
     print('Run redetection of "silent" cells on session %d'%(s+1))
     
@@ -76,37 +76,53 @@ class test_silence_in_sessions:
     self.dataOut = {}
     self.data = {}
     
-    ## find silent neurons in session s
-    self.idxes['silent']= ~self.cluster.activity['status'][:,self.s,1]
-    
     if max_diff is None:
       max_diff = self.cluster.meta['nSes']
     
     dims = self.dims
     T = 8989
-    self.dataIn = {}
     self.dataIn['A'] = scipy.sparse.csc_matrix((np.prod(self.dims),self.cluster.meta['nC']))
     self.dataIn['C'] = np.random.rand(self.cluster.meta['nC'],T)
     
-    ## load footprints of active cells
-    self.pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(s+1)])
-    pathData = pathcat([self.pathSession,'results_OnACID.mat'])
-    ld = loadmat(pathData,variable_names=['A','C','b','f'])
+    if complete_new:
+      self.idxes['undetected'] = np.ones(self.cluster.meta['nC'],'bool')
+      self.dataIn['b'] = np.random.rand(np.prod(dims),1)
+      self.dataIn['f'] = np.random.rand(1,T)
+    else:
+      ## find silent neurons in session s
+      self.idxes['undetected']= ~self.cluster.status[:,self.s,0]
+      
+      ## load footprints of active cells
+      self.pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(s+1)])
+      pathData = pathcat([self.pathSession,'results_OnACID.mat'])
+      ld = loadmat(pathData,variable_names=['A','C','b','f'])
+      
+      c_idx = np.where(~self.idxes['undetected'])[0]
+      n_idx = self.cluster.IDs['neuronID'][c_idx,s,1].astype('int')
     
-    c_idx = np.where(~self.idxes['silent'])[0]
-    n_idx = self.cluster.IDs['neuronID'][c_idx,s,1].astype('int')
+      self.dataIn['A'][:,c_idx] = scipy.sparse.vstack([a/a.sum() for a in ld['A'][:,n_idx].T]).T
+      
+      #if not (ld['C'].shape[0] == ld['A'].shape[1]):
+        #ld['C'] = ld['C'].transpose()
+      T1 = ld['C'].shape[1]
+      self.dataIn['C'][c_idx,:T1] = ld['C'][n_idx,:]
+      if not (ld['b'].shape[0] == ld['A'].shape[0]):
+        ld['b'] = ld['b'].transpose()
+      self.dataIn['b'] = ld['b']
+      if not (ld['f'].shape[1] == self.dataIn['C'].shape[1]):
+        ld['f'] = ld['f'].transpose()
+      self.dataIn['f'] = ld['f']
     
-    self.dataIn['A'][:,c_idx] = scipy.sparse.vstack([a/a.sum() for a in ld['A'][:,n_idx].T]).T
-    self.dataIn['C'][c_idx,:] = ld['C'][n_idx,:]
-    self.dataIn['b'] = ld['b'].T
-    self.dataIn['f'] = ld['f'].T
+    print(self.dataIn['b'].shape)
+    print(self.dataIn['f'].shape)
+    
     ## construct footprint of silent cells (interpolation between adjacent sessions?) and adjust for shift & rotation
     s_ref = np.zeros((self.cluster.meta['nC'],2))*np.NaN
     n_ref = np.zeros((self.cluster.meta['nC'],2))*np.NaN
     
-    for c in np.where(self.idxes['silent'])[0]:
-      s_pre = np.where(self.cluster.activity['status'][c,:s,1])[0]
-      s_post = s+1+np.where(self.cluster.activity['status'][c,s+1:,1])[0]
+    for c in np.where(self.idxes['undetected'])[0]:
+      s_pre = np.where(self.cluster.status[c,:s,0])[0]
+      s_post = s+1+np.where(self.cluster.status[c,s+1:,0])[0]
       
       if len(s_pre)>0:
         s_ref[c,0] = s_pre[-1] if (s-s_pre[-1]) <= max_diff else np.NaN
@@ -119,10 +135,8 @@ class test_silence_in_sessions:
           n_ref[c,1] = self.cluster.IDs['neuronID'][c,int(s_ref[c,1]),1]
     
     s_load = np.unique(s_ref[~np.isnan(s_ref)])
-    
-    print('loading footprints...')
-    
-    progress = tqdm(zip(s_load.astype('int'),range(len(s_load))),total=len(s_load))
+        
+    progress = tqdm(zip(s_load.astype('int'),range(len(s_load))),total=len(s_load),desc='Loading footprints for processing Session %d...'%(s+1))
     for (s_ld,i) in progress:
       
       pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(s_ld+1)])
@@ -222,17 +236,23 @@ class test_silence_in_sessions:
     images = np.reshape(Yr.T, [T] + list(dims), order='F')
     
     Y = np.reshape(Yr.T, [T] + list(self.cluster.meta['dims']), order='F')
+    #Cn = Y.sum(0)
+    #Cn_A = self.dataIn['A'][:,~self.idxes['undetected']].sum(1).reshape(self.cluster.meta['dims'])
+    #print(Cn_A.shape)
+    #return calculate_img_correlation(Cn,Cn_A),calculate_img_correlation(Cn,Cn_A.T)
+    
+    
     self.cnm.estimates.dims = self.cnm.dims = dims
     self.idxes['in'] = np.array(self.dataIn['A'].sum(0)>0).ravel()
     self.cnm.estimates.A = self.dataIn['A'][:,self.idxes['in']]
     
     self.cnm.estimates.C = self.dataIn['C'][self.idxes['in'],:]
-    self.cnm.estimates.b = self.dataIn['b'].T
-    self.cnm.estimates.f = self.dataIn['f'].T
+    self.cnm.estimates.b = self.dataIn['b']
+    self.cnm.estimates.f = self.dataIn['f']
     
     self.cnm.params.change_params({'p':1})
     
-    self.cnm.params.set('online', {'init_batch': 2000})
+    self.cnm.params.set('online', {'init_batch': 1000})
     Yr = np.transpose(np.reshape(images, (T, -1), order='F'))
     if np.isfortran(Yr):
         raise Exception('The file is in F order, it should be in C order (see save_memmap function')
@@ -360,7 +380,7 @@ class test_silence_in_sessions:
     
     print('%d new neurons detected'%nC_new)
     self.idxes['new'] = np.hstack([np.zeros(nC,'bool'),np.ones(nC_new,'bool')])
-    self.idxes['previous'] = np.hstack([~self.idxes['silent'],np.zeros(nC_new,'bool')])
+    self.idxes['previous'] = np.hstack([~self.idxes['undetected'],np.zeros(nC_new,'bool')])
     self.idxes['in'] = np.zeros(nC+nC_new,'bool')
     self.idxes['in'][idxes_Ain[idx_in_bool]] = True
     
@@ -571,9 +591,9 @@ class test_silence_in_sessions:
     self.data = {}
     
     
-  def plot_analysis(self,SNR_thr=2,r_val_thr=0,CNN_thr=0.8):
+  def plot_analysis(self,SNR_thr=2,r_val_thr=0,CNN_thr=0.6):
     
-    
+    ext = 'png'
     idx_good = (self.dataOut['SNR']>SNR_thr) & (self.dataOut['r_values']>r_val_thr) & (self.dataOut['CNN']>CNN_thr)
     idx_bad = ~idx_good
     
@@ -600,13 +620,10 @@ class test_silence_in_sessions:
     np.fill_diagonal(corr,np.NaN)
     np.fill_diagonal(fp_corr,np.NaN)
     
-    max_fp_corr = np.nanmax(fp_corr,1)
-    max_Ca_corr = np.nanmax(corr,1)
-    
     al=0.5
     
-    plt.figure(figsize=(10,4))
-    ax = plt.axes([0.39,0.55,0.1,0.19])
+    plt.figure(figsize=(4,3))
+    ax = plt.axes([0.1,0.2,0.25,0.4])
     for i in range(2):
       ax.hist(acorr[idxs[i]],np.linspace(0.5,1,21),facecolor=col_arr[i],alpha=al,orientation='horizontal')
     #ax.xlabel('$C_{Ca^{2+}}^{in-out}$',fontsize=14)
@@ -616,8 +633,8 @@ class test_silence_in_sessions:
     ax.spines['top'].set_visible(False)
     ax.spines['left'].set_visible(False)
     
-    ax = plt.axes([0.5,0.75,0.1,0.19])
-    for i in range(4):
+    ax = plt.axes([0.4,0.65,0.35,0.3])
+    for i in range(2):
       #if i==1:
         #continue
       plt.hist(fp_acorr[idxs[i]],np.linspace(0.5,1,21),facecolor=col_arr[i],alpha=al)
@@ -627,90 +644,72 @@ class test_silence_in_sessions:
     ax.spines['top'].set_visible(False)
     ax.spines['left'].set_visible(False)
     
-    ax = plt.axes([0.5,0.55,0.1,0.19])
-    for i in range(4):
+    ax = plt.axes([0.4,0.2,0.35,0.4])
+    for i in range(2):
       ax.scatter(fp_acorr[idxs[i]],acorr[idxs[i]],s=2,c=col_arr[i])  
     ax.yaxis.tick_right()
     ax.yaxis.set_label_position("right")
     ax.set_xlabel('$C_{fp}$',fontsize=14)
     ax.set_ylabel('$C_{Ca^{2+}}$',fontsize=14)
-    #plt.tight_layout()
-    #plt.show(block=False)
-    #ext = 'png'
-    #pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(self.s+1)])
-    #pathFigure = pathcat([pathSession,'find_silent1.%s'%(ext)]);
-    #plt.savefig(pathFigure,format=ext,dpi=300)
-    #print('Figure saved as %s'%pathFigure)
+    ax.set_yticks(np.linspace(0,1,3))
+    ax.set_xlim([0,1])
+    ax.set_ylim([0,1])
+    
+    plt.tight_layout()
+    plt.show(block=False)
+    pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(self.s+1)])
+    pathFigure = pathcat([pathSession,'find_silent_similarity.%s'%(ext)]);
+    plt.savefig(pathFigure,format=ext,dpi=300)
+    print('Figure saved as %s'%pathFigure)
+    
+    
     
     ### plot goodness of detected ROIs
-    #plt.figure(figsize=(10,5))
+    plt.figure(figsize=(4,3))
     
-    plt.subplot(231)
-    plt.hist(self.data['D_ROIs'].flatten(),np.linspace(0,700,101),facecolor='k')
-    
-    ax_zoom = plt.axes([0.2,0.8,0.15,0.15])
-    ax_zoom.hist(self.data['D_ROIs'].flatten(),np.linspace(0,20,41),facecolor='k')
-    
-    #ax = plt.subplot(232)
-    #for i in range(4):
-      #ax.hist(-self.dataOut['fitness'][idxs[i]],np.logspace(0.5,4,21),facecolor=col_arr[i],alpha=al)
-    #ax.set_xscale('log')
-    #ax.spines['top'].set_visible(False)
-    #ax.spines['right'].set_visible(False)
-    #ax.set_xlim([10**0.5,10**4])
-    #ax.set_xlabel('fitness',fontsize=14)
-    
-    ax = plt.subplot(233)
+    ax = plt.axes([0.15,0.65,0.4,0.25])
     for i in range(4):
       ax.hist(self.dataOut['r_values'][idxs[i]],np.linspace(-1,1,21),facecolor=col_arr[i],alpha=al)
     #plt.xscale('log')
     ax.set_xlim([-1,1])
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.set_xlabel('r value',fontsize=14)
-    
-    ax = plt.subplot(235)
-    for i in range(4):
-      ax.hist(self.dataOut['SNR'][idxs[i]],np.linspace(0,30,21),facecolor=col_arr[i],alpha=al,orientation='horizontal')
-    ax.invert_xaxis()
+    ax.set_xticks([])
+    ax.set_yticks([])
     ax.spines['top'].set_visible(False)
     ax.spines['left'].set_visible(False)
-    ax.yaxis.tick_right()
+    #ax.set_xlabel('r value',fontsize=14)
+    
+    ax = plt.axes([0.65,0.2,0.25,0.4])
+    for i in range(4):
+      ax.hist(self.dataOut['SNR'][idxs[i]],np.linspace(0,30,21),facecolor=col_arr[i],alpha=al,orientation='horizontal')
+    #ax.invert_xaxis()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    #ax.yaxis.tick_right()
+    ax.set_xticks([])
+    ax.set_yticklabels([])
     ax.yaxis.set_label_position("right")
-    ax.set_ylabel('SNR',fontsize=14)
+    #ax.set_ylabel('SNR',fontsize=14)
     ax.set_ylim([0,30])
     ax.set_xlabel('occurence',fontsize=14)
     
-    
-    #ax = plt.subplot(235)
-    #for i in range(4):
-      #ax.scatter(-self.dataOut['fitness'][idxs[i]],self.dataOut['SNR'][idxs[i]],s=2,c=col_arr[i])
-    #ax.set_xscale('log')
-    #ax.spines['top'].set_visible(False)
-    #ax.spines['right'].set_visible(False)
-    #ax.spines['left'].set_visible(False)
-    #ax.set_yticks([])
-    #ax.set_xlabel('fitness',fontsize=14)
-    #ax.set_xlim([10**(0.5),10**4.1])
-    #ax.set_ylim([0,30])
-    
-    ax =plt.subplot(236)
+    ax = plt.axes([0.15,0.2,0.4,0.4])
     for i in range(4):
-      ax.scatter(self.dataOut['r_values'][idxs[i]],self.dataOut['SNR'][idxs[i]],s=2,c=col_arr[i])
+      ax.plot(self.dataOut['r_values'][idxs[i]],self.dataOut['SNR'][idxs[i]],color=col_arr[i],markersize=1)
     ax.set_xlabel('r value',fontsize=14)
-    #plt.ylabel('SNR',fontsize=14)
+    ax.yaxis.tick_right()
+    ax.set_ylabel('SNR',fontsize=14)
     ax.set_xlim([-1,1])
     ax.set_ylim([0,30])
     ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    #ax.spines['right'].set_visible(False)
     ax.spines['left'].set_visible(False)
-    ax.set_yticks([])
+    #ax.set_yticks([])
     
     plt.tight_layout()
     plt.show(block=False)
-    ext = 'png'
+    
     pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(self.s+1)])
-    pathFigure = pathcat([pathSession,'find_silent.%s'%(ext)]);
+    pathFigure = pathcat([pathSession,'find_silent_evaluation.%s'%(ext)]);
     plt.savefig(pathFigure,format=ext,dpi=300)
     print('Figure saved as %s'%pathFigure)
     
@@ -744,14 +743,522 @@ class test_silence_in_sessions:
     
     #plt.subplot(315)
     #plt.plot(Cout[c,:])
-    #if not self.idxes['silent'][c]:
+    #if not self.idxes['undetected'][c]:
       #plt.plot(Cin[c,:])
     plt.suptitle('correlation: %5.3f'%self.data['corr'][c,c])
     plt.show(block=False)
     
+  def plot_detection(self):
     
+    ext = 'png'
+    plt.figure(figsize=(5,4))
+    ax = plt.subplot(111)
+    ax.imshow(self.dataOut['A'].sum(1).reshape(self.cluster.meta['dims']),origin='lower')
+    
+    [ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='w', linewidths=0.5) for a in self.dataIn['A'][:,~self.idxes['undetected']].T]
+    #[ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='r', linewidths=0.5) for a in self.dataIn['A'][:,self.idxes['undetected']].T]
+    plt.tight_layout()
+    plt.show(block=False)
+    
+    pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(self.s+1)])
+    pathFigure = pathcat([pathSession,'find_silent_only_before.%s'%(ext)]);
+    plt.savefig(pathFigure,format=ext,dpi=300)
+    print('Figure saved as %s'%pathFigure)
+    
+    #plt.figure(figsize=(5,4))
+    #ax = plt.subplot(111)
+    #ax.imshow(self.dataOut['A'].sum(1).reshape(self.cluster.meta['dims']),origin='lower')
+    
+    #[ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='w', linewidths=0.5) for a in self.dataOut['A'][:,self.idxes['active_good']].T]
+    #[ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='r', linewidths=0.5) for a in self.dataOut['A'][:,self.idxes['silent_good']].T]
+
+    ##[ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='r', linewidths=1) for a in self.dataIn['A'][:,self.idxes['undetected']].T]
+    #plt.tight_layout()
+    #plt.show(block=False)
+    #pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(self.s+1)])
+    #pathFigure = pathcat([pathSession,'find_silent_after.%s'%(ext)]);
+    #plt.savefig(pathFigure,format=ext,dpi=300)
+    #print('Figure saved as %s'%pathFigure)
+
+
+class plot_test_undetected:
+  
+  def __init__(self,basePath,mouse):
+    
+    dataSet='redetect'  ## nothing else makes sense
+    
+    self.pathMouse = os.path.join(basePath,mouse)
+    self.pathMatching = os.path.join(self.pathMouse,'matching/Sheintuch_registration_results_%s.pkl'%dataSet)
+  
+  
+  def load(self,ext='mat'):
+    
+    ### load matching results
+    ld_dat = pickleData([],self.pathMatching,'load')
+    try:
+      assignments = ld_dat['assignments']
+    except:
+      assignments = ld_dat['assignment']
+    self.nC,self.nSes = assignments.shape
+    
+    ### preallocate arrays
+    self.data = {'eval':        {'SNR':       np.zeros((self.nC,self.nSes))*np.NaN,
+                                 'CNN':       np.zeros((self.nC,self.nSes))*np.NaN,
+                                 'r_values':  np.zeros((self.nC,self.nSes))*np.NaN},
+                 'fp_corr':   np.zeros((self.nC,self.nSes))*np.NaN,
+                 'C_corr':    np.zeros((self.nC,self.nSes))*np.NaN,
+                 'idxes':       {'previous':  np.zeros((self.nC,self.nSes),'bool'),
+                                 'in':        np.zeros((self.nC,self.nSes),'bool'),
+                                 'detected':  np.zeros((self.nC,self.nSes),'bool')}
+                 }
+    
+    ### for all s, store eval and idxes and calculate A-A and C-C correlation
+    self.progress = tqdm(range(self.nSes))
+    for s in self.progress:
+      
+      ## load results
+      pathSession = os.path.join(self.pathMouse,'Session%02d'%(s+1))
+      pathData = os.path.join(pathSession,'results_redetect.%s'%ext)
+      self.progress.set_description('Now processing Session %d'%(s+1))
+      if ext == 'mat':
+        ld = loadmat(pathData,squeeze_me=True)
+      else:
+        ld = pickleData([],pathData,'load')
+      
+      idx_c = np.where(~np.isnan(assignments[:,s]))[0]
+      n_arr = assignments[idx_c,s].astype('int')
+      
+      ## store eval
+      for key in ['SNR','r_values','CNN']:
+        self.data['eval'][key][idx_c,s] = ld[key][n_arr]
+      
+      ## store indices
+      self.data['idxes']['detected'][idx_c,s] = True
+      self.data['idxes']['previous'][idx_c,s] = ld['idx_previous'][n_arr]
+      self.data['idxes']['in'][idx_c,s] = ld['idx_Ain'][n_arr]
+      
+      dims = (512,512)
+      ## find next footprints with low distance
+      cm_in = com(ld['Ain'],dims[0],dims[1])
+      cm_out = com(ld['A'],dims[0],dims[1])
+      #return ld['A'], ld['Ain']
+      
+      nC_in = ld['Ain'].shape[1]
+      nC_out = ld['A'].shape[1]
+      
+      #idx_out_bool = np.zeros(nC_out,'bool')
+      #idx_in_bool = np.zeros(nC_in,'bool')
+      
+      matches = []
+      idx_new = []
+      nC_new = 0
+      dc = 0              ## difference in index
+      for c in np.where((ld['A']>0).sum(0)>50)[1]:
+        if (c+dc < nC_in):
+          d = np.linalg.norm(cm_in[c+dc,:]-cm_out[c,:])
+          if d > 10:
+            dist = np.linalg.norm(cm_in-cm_out[c,:],axis=1)
+            dc_tmp = np.argmin(dist)-c
+            if (dc_tmp>=dc) & (dc_tmp<=max(10,nC_in-nC_out)):
+              dc = dc_tmp
+              #idx_in_bool[c+dc] = True
+              #idx_out_bool[c] = True
+              
+              print('new match has been found: %d to %d with dc=%d'%(c,c+dc,dc))
+            else:
+              nC_new += 1
+              #idx_new.append(c)
+              print('no match could be found for neuron %d, minimum distance: %5.3g, dc = %d'%(c,dist.min(),dc_tmp))
+          else:
+            #idx_in_bool[c+dc] = True
+            #idx_out_bool[c] = True
+            matches.append([c+dc,c])
+      
+      C_std = ld['C'].std(1)
+      Cin_std = ld['Cin'].std(1)
+      
+      chunks = 1000
+      idx_Ain = np.where((ld['Ain']>0).sum(0)>50)[1]#np.where(self.data['idxes']['in'][:,s])[0]
+      Ain_norm = np.zeros(ld['Ain'].shape[1])*np.NaN
+      nC_in = len(idx_Ain)
+      steps = int(nC_in/chunks)
+      for i in tqdm(range(steps+(np.mod(nC_in,chunks)>0)),leave=False):
+        c_start = i*chunks
+        c_end = min(nC_in,(i+1)*chunks)
+        Ain_norm[idx_Ain[c_start:c_end]] = np.linalg.norm(ld['Ain'][:,idx_Ain[c_start:c_end]].toarray(),axis=0)
+      
+      idx_A = np.where((ld['A']>0).sum(0)>50)[1]#np.where(self.data['idxes']['in'][:,s])[0]
+      A_norm = np.zeros(ld['A'].shape[1])*np.NaN
+      nC_out = len(idx_A)
+      steps = int(nC_out/chunks)
+      for i in tqdm(range(steps+(np.mod(nC_out,chunks)>0)),leave=False):
+        c_start = i*chunks
+        c_end = min(nC_out,(i+1)*chunks)
+        A_norm[idx_A[c_start:c_end]] = np.linalg.norm(ld['A'][:,idx_A[c_start:c_end]].toarray(),axis=0)
+      
+      ## calculate correlation between input and output
+      for (n1,n2) in tqdm(matches,total=len(matches),leave=False):
+        c = np.where(assignments[:,s]==n2)[0]
+        self.data['fp_corr'][c,s] = ld['A'][:,n2].multiply(ld['Ain'][:,n1]).sum()/(A_norm[n2]*Ain_norm[n1])
+        self.data['C_corr'][c,s] = np.cov(ld['C'][n2,:],ld['Cin'][n1,:])[0,1]/(C_std[n2]*Cin_std[n1])
+    
+  def plot(self,SNR_thr=2,r_val_thr=0,CNN_thr=0.6):
+    
+    idx = self.data['idxes']['previous']
+    
+    
+    idx_good = (self.data['eval']['SNR']>SNR_thr) & (self.data['eval']['r_values']>r_val_thr) & (self.data['eval']['CNN']>CNN_thr)
+    idx_bad = ~idx_good
+    
+    idxes = {}
+    idxes['active_good'] = idx & idx_good
+    idxes['active_bad'] = idx & idx_bad
+    
+    idxes['silent_good'] = ~idx & idx_good
+    idxes['silent_bad'] = ~idx & idx_bad
+    
+    plt.figure(figsize=(8,6))
+    
+    ax_ROIs = plt.axes([0.025,0.675,0.175,0.35])
+    ax_ROIs2 = plt.axes([0.25,0.675,0.175,0.35])
+    
+    s = 10
+    
+    pathMatching = os.path.join(self.pathMouse,'matching/Sheintuch_registration_results_OnACID.pkl')
+    dt = pickleData([],pathMatching,'load')
+    assignments = dt['assignment']
+    n_arr = assignments[np.where(~np.isnan(assignments[:,s-1]))[0],s-1].astype('int')
+    
+    pathSession = os.path.join(self.pathMouse,'Session%02d'%(s))
+    pathData = os.path.join(pathSession,'results_redetect.mat')
+    ld = loadmat(pathData,squeeze_me=True)
+    idx_A = ld['idx_previous'][:ld['Ain'].shape[1]].astype('bool')
+    #idx_A = np.zeros(ld['Ain'].shape[1],'bool')
+    #idx_A[n_arr] = True
+    
+    bounds = [[100,150],[250,300]]
+    self.plot_detection(ax_ROIs,ld['Ain'][:,idx_A],ld['Ain'][:,~idx_A],bounds=bounds)
+    ax_ROIs.set_xlim(bounds[0])
+    ax_ROIs.set_ylim(bounds[1])
+    ax_ROIs.set_xticks([])
+    ax_ROIs.set_yticks([])
+    sbar = ScaleBar(530.68/512 *10**(-6),location='lower right')
+    ax_ROIs.add_artist(sbar)
+    
+    
+    pathMatching = os.path.join(self.pathMouse,'matching/Sheintuch_registration_results_redetect.pkl')
+    dt = pickleData([],pathMatching,'load')
+    assignments = dt['assignments']
+    n_arr = assignments[np.where(~np.isnan(assignments[:,s-1]))[0],s-1].astype('int')
+    
+    pathSession = os.path.join(self.pathMouse,'Session%02d'%(s))
+    pathData = os.path.join(pathSession,'results_redetect.mat')
+    ld = loadmat(pathData,squeeze_me=True)
+    idx_A = ld['idx_previous'].astype('bool')
+    #idx_A = np.zeros(ld['A'].shape[1],'bool')
+    #idx_A[n_arr] = True
+    
+    self.plot_detection(ax_ROIs2,ld['A'][:,idx_A],ld['A'][:,~idx_A],bounds=bounds)
+    ax_ROIs2.set_xlim(bounds[0])
+    ax_ROIs2.set_ylim(bounds[1])
+    ax_ROIs2.set_xticks([])
+    ax_ROIs2.set_yticks([])
+    
+    #ax1 = ax.twinx()
+    #ax2 = ax.twiny()
+    #ax1.hist(self.data['fp_corr'][idx],np.linspace(0,1,101),facecolor='k',alpha=0.5)
+    #ax1.hist(self.data['fp_corr'][~idx],np.linspace(0,1,101),facecolor='r',alpha=0.5)
+    #ax1.set_yticks([])
+    #ax1.invert_yaxis()
+    
+    #ax2.hist(self.data['C_corr'][idx],np.linspace(0,1,101),facecolor='k',alpha=0.5,orientation='horizontal')
+    #ax2.hist(self.data['C_corr'][~idx],np.linspace(0,1,101),facecolor='r',alpha=0.5,orientation='horizontal')
+    #ax2.set_xticks([])
+    
+    #plt.figure(figsize=(6,2.5))
+    ax = plt.axes([0.025,0.1,0.15,0.175])
+    
+    ax.plot(self.data['fp_corr'][idx].flat,self.data['C_corr'][idx].flat,'ko',markersize=0.5,markeredgewidth=0,alpha=0.5)
+    ax.plot(self.data['fp_corr'][~idx].flat,self.data['C_corr'][~idx].flat,'ro',markersize=0.5,markeredgewidth=0,alpha=0.5)
+    
+    ax.plot(-1,-1,'ko',markersize=5,markeredgewidth=0,alpha=0.5,label='old')
+    ax.plot(-1,-1,'ro',markersize=5,markeredgewidth=0,alpha=0.5,label='new')
+    
+    ax.set_xlabel('$c_{fp}$',fontsize=14)
+    ax.set_ylabel('$c_{Ca}$',fontsize=14)
+    ax.set_xlim([-0.1,1])
+    ax.tick_params(axis='y',which='both',left=False,right=True,labelright=True,labelleft=False)
+    ax.yaxis.set_label_position("right")
+    ax.spines['left'].set_visible(False)
+    ax.spines['top'].set_visible(False)
+    ax.set_ylim([-0.1,1])
+    ax.set_yticks(np.linspace(0,1,3))
+    
+    ax.legend(loc='upper right',bbox_to_anchor=[0.7,1.2],fontsize=10)
+    
+    ax = plt.axes([0.275,0.1,0.15,0.175])
+    ax.plot(self.data['eval']['r_values'][~idx],self.data['eval']['SNR'][~idx],'ro',markersize=0.25,markeredgewidth=0,alpha=0.5)
+    ax.plot(self.data['eval']['r_values'][idx],self.data['eval']['SNR'][idx],'ko',markersize=0.25,markeredgewidth=0,alpha=0.5)
+    ax.plot([-1,1],[2,2],'k--')
+    ax.plot([0,0],[1,40],'k--')
+    
+    ax.set_yscale('log')
+    ax.set_ylabel('SNR',fontsize=14)
+    ax.set_xlabel('$r_{value}$',fontsize=14)
+    ax.tick_params(axis='y',which='both',left=False,right=True,labelright=True,labelleft=False)
+    ax.yaxis.set_label_position("right")
+    ax.spines['left'].set_visible(False)
+    ax.spines['top'].set_visible(False)
+    
+    #ax1 = ax.twinx()
+    #ax1.hist(self.data['eval']['r_values'][idx],np.linspace(-0.5,1,151),facecolor='k',alpha=0.5)
+    #ax1.hist(self.data['eval']['r_values'][~idx],np.linspace(-0.5,1,151),facecolor='r',alpha=0.5)
+    #ax1.set_yticks([])
+    #ax1.invert_yaxis()
+    
+    #ax2 = ax.twiny()
+    #ax2.hist(self.data['eval']['SNR'][idx],np.linspace(0,40,101),facecolor='k',alpha=0.5,orientation='horizontal')
+    #ax2.hist(self.data['eval']['SNR'][~idx],np.linspace(0,40,101),facecolor='r',alpha=0.5,orientation='horizontal')
+    #ax2.set_xticks([])
+    
+    
+    #plt.tight_layout()
+    #plt.show(block=False)
+    
+    #ext = 'png'
+    #path = pathcat([self.pathMouse,'complete_set_evaluation.%s'%ext])
+    #plt.savefig(path,format=ext,dpi=300)
+    
+    
+    idx_good = np.where((self.data['C_corr']>0.8) & idx)
+    i = np.random.randint(len(idx_bad[0]))
+    c = idx_good[0][i]
+    s = idx_good[1][i]
+    #s,c,n = (73,1441,2406)
+    ld_dat = pickleData([],self.pathMatching,'load')
+    assignments = ld_dat['assignments']
+    n = int(assignments[c,s])
+    #plt.draw()
+    print(s,c,n)    ## (73,1441,2406)
+    
+    pathSession = os.path.join(self.pathMouse,'Session%02d'%(s+1))
+    pathData = os.path.join(pathSession,'results_redetect.mat')
+    ld = loadmat(pathData,variable_names=['Cin','C','Ain','A'],squeeze_me=True)
+    
+    #plt.figure(figsize=(6,2.5))
+    dims=(512,512)
+    ax_A = plt.axes([0.025,0.525,0.125,0.15])
+    ax_A.imshow(ld['A'].sum(1).reshape(dims))
+    
+    ax_Ca = plt.axes([0.15,0.525,0.3,0.15])
+    Cin = ld['Cin']/ld['Cin'].max(1)[:,np.newaxis]
+    C = ld['C']/ld['C'].max(1)[:,np.newaxis]
+    
+    cm = com(ld['A'],dims[0],dims[1])
+    
+    # calculate CoMs and distance
+    D_ROIs = sp.spatial.distance.cdist(cm,cm)
+    n_close = np.where(D_ROIs[n,:]<10)[0]
+    A_norm = np.linalg.norm(ld['A'].toarray(),axis=0)
+        
+    # plot all closeby ones, highlight overlapping ones
+    t_arr = np.linspace(0,8989/15,8989)
+    ax_Ca.plot(t_arr,Cin[n,:],'k',linewidth=0.5)
+    ax_Ca.plot(t_arr,C[n,:]+1,'g',linewidth=0.5)
+    #ax_Ca.text(6000/15,1.5,'corr: %5.3g, SNR: %5.3g'%(self.data['fp_corr'][c,s],self.data['eval']['SNR'][c,s]))
+    
+    ax_A.contour((ld['Ain'][:,n]/ld['Ain'][:,n].max()).reshape(dims).toarray(), levels=[0.2], colors='w', linewidths=3)
+    ax_A.contour((ld['A'][:,n]/ld['A'][:,n].max()).reshape(dims).toarray(), levels=[0.2], colors='g', linewidths=3)
+    
+    i = 0
+    for nn in n_close:
+      A_corr = ld['A'][:,n].multiply(ld['A'][:,nn]).sum()/(A_norm[n]*A_norm[nn])
+      if (A_corr>0.3) and not (n==nn):
+        ax_A.contour((ld['A'][:,nn]/ld['A'][:,nn].max()).reshape(dims).toarray(), levels=[0.2], colors='r', linewidths=1)
+        
+        cc = np.where(assignments[:,s] == nn)[0][0]
+        #print(c)
+        #print(self.data['corr'][cc,s])
+        #ax_Ca.text(6000,i+2.5,'corr: %5.3g, SNR: %5.3g'%(A_corr,self.data['eval']['SNR'][cc,s]))
+        ax_Ca.plot(t_arr,C[nn,:]+i+2,'r',linewidth=0.5)
+        i+=1
+    
+    ax_A.set_xlim([cm[n,0]-15,cm[n,0]+15])
+    ax_A.set_ylim([cm[n,1]-15,cm[n,1]+15])
+    ax_A.set_xticks([])
+    ax_A.set_yticks([])
+    ax_A.axis('off')
+    #ax_A.text(cm[n,0],cm[n,1]-14,'$c_{fp}=%4.2g$\n$c_{Ca}=%4.2g$'%(self.data['fp_corr'][c,s],self.data['C_corr'][c,s]),color='w',fontsize=12)
+    ax_Ca.spines['right'].set_visible(False)
+    ax_Ca.spines['top'].set_visible(False)
+    ax_Ca.set_xticks([])
+    ax_Ca.set_yticks([])
+    #ax_Ca.set_xlabel('time [s]')
+    
+    #plt.tight_layout()
+    #plt.show(block=False)
+    #ext = 'png'
+    #path = pathcat([self.pathMouse,'complete_set_evaluation_example_good.%s'%ext])
+    #plt.savefig(path,format=ext,dpi=300)
+    
+    
+    
+    
+    
+    idx_bad = np.where((self.data['C_corr']<0.6) & idx)
+    i = np.random.randint(len(idx_bad[0]))
+    c = idx_bad[0][i]
+    s = idx_bad[1][i]
+    s,c,n = (73,1441,2406)
+    ld_dat = pickleData([],self.pathMatching,'load')
+    assignments = ld_dat['assignments']
+    n = int(assignments[c,s])
+    #plt.draw()
+    print(s,c,n)    ## (73,1441,2406)
+    
+    pathSession = os.path.join(self.pathMouse,'Session%02d'%(s+1))
+    pathData = os.path.join(pathSession,'results_redetect.mat')
+    ld = loadmat(pathData,variable_names=['Cin','C','Ain','A'],squeeze_me=True)
+    
+    #plt.figure(figsize=(6,2.5))
+    #dims=(512,512)
+    ax_A = plt.axes([0.025,0.35,0.125,0.15])
+    #ax_A = plt.axes([0.1,0.2,0.35,0.75])
+    ax_A.imshow(ld['A'].sum(1).reshape(dims))
+    
+    ax_Ca = plt.axes([0.15,0.35,0.3,0.15])
+    Cin = ld['Cin']/ld['Cin'].max(1)[:,np.newaxis]
+    C = ld['C']/ld['C'].max(1)[:,np.newaxis]
+    
+    cm = com(ld['A'],dims[0],dims[1])
+    
+    # calculate CoMs and distance
+    D_ROIs = sp.spatial.distance.cdist(cm,cm)
+    n_close = np.where(D_ROIs[n,:]<10)[0]
+    A_norm = np.linalg.norm(ld['A'].toarray(),axis=0)
+        
+    # plot all closeby ones, highlight overlapping ones
+    t_arr = np.linspace(0,8989/15,8989)
+    ax_Ca.plot(t_arr,Cin[n,:],'k',linewidth=0.5)
+    ax_Ca.plot(t_arr,C[n,:]+1,'g',linewidth=0.5)
+    #ax_Ca.text(6000/15,1.5,'corr: %5.3g, SNR: %5.3g'%(self.data['fp_corr'][c,s],self.data['eval']['SNR'][c,s]))
+    
+    ax_A.contour((ld['Ain'][:,n]/ld['Ain'][:,n].max()).reshape(dims).toarray(), levels=[0.2], colors='w', linewidths=3)
+    ax_A.contour((ld['A'][:,n]/ld['A'][:,n].max()).reshape(dims).toarray(), levels=[0.2], colors='g', linewidths=3)
+    
+    i = 0
+    for nn in n_close:
+      A_corr = ld['A'][:,n].multiply(ld['A'][:,nn]).sum()/(A_norm[n]*A_norm[nn])
+      if (A_corr>0.3) and not (n==nn):
+        ax_A.contour((ld['A'][:,nn]/ld['A'][:,nn].max()).reshape(dims).toarray(), levels=[0.2], colors='r', linewidths=1)
+        
+        cc = np.where(assignments[:,s] == nn)[0][0]
+        #print(c)
+        #print(self.data['corr'][cc,s])
+        #ax_Ca.text(6000,i+2.5,'corr: %5.3g, SNR: %5.3g'%(A_corr,self.data['eval']['SNR'][cc,s]))
+        ax_Ca.plot(t_arr,C[nn,:]+i+2,'r',linewidth=0.5)
+        i+=1
+    
+    ax_A.set_xlim([cm[n,0]-15,cm[n,0]+15])
+    ax_A.set_ylim([cm[n,1]-15,cm[n,1]+15])
+    ax_A.set_xticks([])
+    ax_A.set_yticks([])
+    ax_A.axis('off')
+    #ax_A.text(cm[n,0],cm[n,1]-14,'$c_{fp}=%4.2g$\n$c_{Ca}=%4.2g$'%(self.data['fp_corr'][c,s],self.data['C_corr'][c,s]),color='w',fontsize=12)
+    ax_Ca.spines['right'].set_visible(False)
+    ax_Ca.spines['top'].set_visible(False)
+    ax_Ca.set_yticks([])
+    ax_Ca.set_xlabel('time [s]')
+    
+    dataSet = 'redetect'
+    pathLoad = pathcat([self.pathMouse,'clusterStats_%s.pkl'%dataSet])
+    ld = pickleData([],pathLoad,'load')
+    idxes = (ld['SNR']>2) & (ld['r_values']>0) & (ld['CNN']>0.6) & (ld['firingrate']>0)
+    
+    colors = [(1,0,0,0),(1,0,0,1)]
+    RedAlpha = mcolors.LinearSegmentedColormap.from_list('RedAlpha',colors,N=2)
+    colors = [(0,0,0,0),(0,0,0,1)]
+    BlackAlpha = mcolors.LinearSegmentedColormap.from_list('BlackAlpha',colors,N=2)
+    
+    nC,nS = assignments.shape
+    ax_oc = plt.axes([0.6,0.1,0.275,0.625])
+    ax_oc2 = ax_oc.twinx()
+    ax_oc.imshow((~np.isnan(assignments))&idxes,cmap=BlackAlpha,aspect='auto')
+    ax_oc2.imshow((~np.isnan(assignments))&(~idxes),cmap=RedAlpha,aspect='auto')
+    #ax_oc.imshow(self.results['p_matched'],cmap='binary',aspect='auto')
+    ax_oc.set_xlabel('session')
+    ax_oc.set_ylabel('neuron ID')
+    
+    ax = plt.axes([0.6,0.725,0.275,0.2])
+    ax.plot(np.linspace(0,nS,nS),(~np.isnan(assignments)).sum(0),'ro',markersize=1)
+    ax.plot(np.linspace(0,nS,nS),((~np.isnan(assignments)) & idxes).sum(0),'ko',markersize=1)
+    ax.set_xlim([0,nS])
+    ax.set_ylim([0,3500])
+    ax.set_xticks([])
+    ax.set_ylabel('# neurons')
+    
+    ax = plt.axes([0.875,0.1,0.075,0.625])
+    ax.plot(((~np.isnan(assignments)) & idxes).sum(1),np.linspace(0,nC,nC),'ko',markersize=0.5)
+    ax.invert_yaxis()
+    ax.set_ylim([nC,0])
+    ax.set_yticks([])
+    ax.set_xlabel('occurence')
+    
+    ax = plt.axes([0.875,0.725,0.075,0.2])
+    ax.hist((~np.isnan(assignments)).sum(1),np.linspace(0,nS,nS),color='r',cumulative=True,density=True,histtype='step')
+    ax.hist(((~np.isnan(assignments)) & idxes).sum(1),np.linspace(0,nS,nS),color='k',alpha=0.5,cumulative=True,density=True,histtype='step')
+    ax.set_xticks([])
+    #ax.set_yticks([])
+    ax.yaxis.tick_right()
+    ax.yaxis.set_label_position("right")
+    ax.set_ylim([0,1])
+    ax.set_yticks(np.linspace(0,1,3))
+    #ax.set_ylabel('# neurons')
+    ax.spines['top'].set_visible(False)
+    #ax.spines['right'].set_visible(False)
+    
+    
+    
+    
+    plt.tight_layout()
+    plt.show(block=False)
+    ext = 'png'
+    path = pathcat([self.pathMouse,'complete_set_evaluation.%s'%ext])
+    plt.savefig(path,format=ext,dpi=300)
     
   
+  def plot_detection(self,ax,A1,A2,bounds=None):
+    dims = (512,512)
+    
+    if bounds is None:
+      bounds = [[0,dims[0]],[0,dims[1]]]
+    
+    ax.imshow(A1.sum(1).reshape(dims),origin='lower')
+    
+    CM = com(A1,dims[0],dims[1])
+    idx_bounds = (CM[:,0] > bounds[0][0]) & (CM[:,0] < bounds[0][1]) & (CM[:,1] > bounds[1][0]) & (CM[:,1] < bounds[1][1])
+    [ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='w', linewidths=0.5) for a in A1[:,idx_bounds].T]
+    
+    CM = com(A2,dims[0],dims[1])
+    idx_bounds = (CM[:,0] > bounds[0][0]) & (CM[:,0] < bounds[0][1]) & (CM[:,1] > bounds[1][0]) & (CM[:,1] < bounds[1][1])
+    [ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='r', linewidths=0.5) for a in A2[:,idx_bounds].T]
+    
+    
+    #plt.figure(figsize=(5,4))
+    #ax = plt.subplot(111)
+    #ax.imshow(self.dataOut['A'].sum(1).reshape(self.cluster.meta['dims']),origin='lower')
+    
+    #[ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='w', linewidths=0.5) for a in self.dataOut['A'][:,self.idxes['active_good']].T]
+    #[ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='r', linewidths=0.5) for a in self.dataOut['A'][:,self.idxes['silent_good']].T]
+
+    ##[ax.contour((a/a.max()).reshape(512,512).toarray(), levels=[0.3], colors='r', linewidths=1) for a in self.dataIn['A'][:,self.idxes['undetected']].T]
+    #plt.tight_layout()
+    #plt.show(block=False)
+    #pathSession = pathcat([self.cluster.meta['pathMouse'],'Session%02d'%(self.s+1)])
+    #pathFigure = pathcat([pathSession,'find_silent_after.%s'%(ext)]);
+    #plt.savefig(pathFigure,format=ext,dpi=300)
+    #print('Figure saved as %s'%pathFigure)
+
 
 def compute_event_exceptionality(traces, robust_std=False, N=5, sigma_factor=3.):
     """

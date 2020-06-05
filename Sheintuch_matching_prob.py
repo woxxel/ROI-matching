@@ -8,26 +8,21 @@ from scipy.optimize import curve_fit, linear_sum_assignment
 import matplotlib.pyplot as plt
 from matplotlib import animation
 from matplotlib import cm
+import matplotlib.colors as mcolors
 
 from mpl_toolkits.mplot3d import Axes3D
 
 
 sys.path.append('/home/wollex/Data/Documents/Uni/2016-XXXX_PhD/Japan/Work/Programs/PC_analysis')
-from utils import com, pathcat, calculate_img_correlation, get_shift_and_flow, fun_wrapper, pickleData
+from utils import com, pathcat, calculate_img_correlation, get_shift_and_flow, fun_wrapper, pickleData, gmean
 
 warnings.filterwarnings("ignore")
 
 
 class Sheintuch_matching:
   
-  def __init__(self,basePath,mouse,sessions,dataSet='redetect',SNR_thr=2.,r_thr=0.0,d_thr=12,nbins=100,qtl=[0.05,0.95],use_kde=True,model='new'):
-    ## build histograms:
-    # nearest neighbour / others
-    # distance & footprint correlation 
-    ### loading data
+  def __init__(self,basePath,mouse,sessions,dataSet='redetect',SNR_thr=1.,r_thr=-1.0,s_corr_thr=0.3,d_thr=12,nbins=100,qtl=[0.05,0.95],use_kde=True,model='new'):
     
-    print('shifted vs unshifted version')
-    print('matching assessment (how to? from Sheintuch)')
     self.para = {'pathMouse': pathcat([basePath,mouse]),
                  'sessions':  list(chain.from_iterable(sessions)) if (type(sessions[0]) is range) else list(chain(sessions)),
                  'fp_file':   'results_%s.mat'%dataSet,
@@ -38,10 +33,11 @@ class Sheintuch_matching:
                  'pxtomu':    530.68/512,
                  'SNR_thr':   SNR_thr,
                  'r_thr':     r_thr,
+                 'session_correlation_thr':s_corr_thr,
                  'use_kde':   use_kde,
                  'model':     model         ## can be 'new', 'old', or 'both'
                  }  
-    
+    self.dataSet = dataSet
     self.nS = len(list(self.para['sessions']))
     
     self.data = {'nA':                np.zeros(self.nS,'int'),
@@ -51,10 +47,13 @@ class Sheintuch_matching:
     self.session_data = {'D_ROIs':[],
                          'fp_corr':[],
                          'fp_corr_max':[],
-                         'nearest_neighbour':[]}
+                         'nearest_neighbour':[],
+                         'idx_eval':[]}
     
-    self.model = {'counts':         np.zeros((self.para['nbins'],self.para['nbins'],3)),
-                  'counts_old':     np.zeros((self.para['nbins'],self.para['nbins'],3)),
+    self.model = {'counts':           np.zeros((self.para['nbins'],self.para['nbins'],3)),
+                  'counts_old':       np.zeros((self.para['nbins'],self.para['nbins'],3)),
+                  'counts_same':      np.zeros((self.para['nbins'],self.para['nbins'])),
+                  'counts_same_old':  np.zeros((self.para['nbins'],self.para['nbins'])),
                   'fit_function':   {'distance':       {'NN':   [],
                                                         'nNN':  [],
                                                         'all':  []},
@@ -88,40 +87,46 @@ class Sheintuch_matching:
   def run_analysis(self,save_results=False,suffix=''):
     self.s_ref = 0
     
-    self.progress = tqdm(zip(self.para['sessions'],range(self.nS)),total=self.nS)
-    for (s0,s) in self.progress:
+    self.progress = tqdm(enumerate(self.para['sessions']),total=self.nS)
+    for (s,s0) in self.progress:
       
       self.A2 = self.load_footprints(s0)
       
-      if s>0:
-        _,_,_,c_max = get_shift_and_flow(self.A_ref,self.A2,self.para['dims'],projection=1,plot_bool=False)
-        self.progress.set_description('Aligning data from Session %d, c=%5.3g'%(s0,c_max))
-        if c_max < 0.3:   ## don't include this session in matching
-          print('skipping session %s (correlation c=%5.3g too low)'%(s0,c_max))
-          continue
-        self.prepare_footprints()
-      
-      self.A_idx = np.squeeze(np.array((self.A2>0).sum(0)>50,'bool'))
-      self.data['nA'][s] = self.A2.shape[1]
+      if not (self.A2 is None):
+        if s>0:
+          c_max,_ = calculate_img_correlation(self.Cn_ref,self.Cn,plot_bool=False)
+          
+          #_,_,_,c_max = get_shift_and_flow(self.A_ref,self.A2,self.para['dims'],projection=1,plot_bool=False)
+          
+          self.progress.set_description('Aligning data from Session %d, c=%5.3g'%(s0,c_max))
+          if c_max < self.para['session_correlation_thr']:   ## don't include this session in matching
+            print('skipping session %s (correlation c=%5.3g too low)'%(s0,c_max))
+            continue
+          self.prepare_footprints()
         
-      self.progress.set_description('Calculate neuron positions for Session %d'%s0)
-      self.data['cm'][s] = com(self.A2,self.para['dims'][0],self.para['dims'][1]) * self.para['pxtomu']
-      self.data['cm'][s][~self.A_idx,:] = np.NaN    ## some empty footprints might be in here
-      
-      if s>0:
-        self.progress.set_description('Calculate statistics for Session %d'%s0)
-        self.calculate_statistics(self.A_ref,self.A2,s)       # calculating distances and footprint correlations
-      
-      if self.para['use_kde']:
-        self.progress.set_description('Calculate kernel density for Session %d'%s0)
-        self.position_kde(self.A2,s,self.para['qtl'])         # build kernel
-      
-      if s>0:
-        self.progress.set_description('Update model with data from Session %d'%s0)
-        self.update_joint_model(s,self.para['use_kde'])
+        self.A_idx = np.squeeze(np.array((self.A2>0).sum(0)>50,'bool')) & self.session_data['idx_eval']
+        self.data['nA'][s] = self.A2.shape[1]
+          
+        self.progress.set_description('Calculate neuron positions for Session %d'%s0)
+        self.data['cm'][s] = com(self.A2,self.para['dims'][0],self.para['dims'][1]) * self.para['pxtomu']
+        self.data['cm'][s][~self.A_idx,:] = np.NaN    ## some empty footprints might be in here
         
-      self.A_ref = self.A2.copy()
-      self.s_ref = s
+        if self.para['use_kde']:
+          self.progress.set_description('Calculate kernel density for Session %d'%s0)
+          self.position_kde(self.A2,s,self.para['qtl'])         # build kernel
+        
+        self.calculate_statistics(self.A2,self.A2,s,cm_ref=self.data['cm'][s],A_idx_ref=self.A_idx)
+        self.update_joint_model(self.para['use_kde'],ds=0,s=s)
+        if s>0:
+          self.progress.set_description('Calculate statistics for Session %d'%s0)
+          self.calculate_statistics(self.A_ref,self.A2,s)       # calculating distances and footprint correlations
+          self.progress.set_description('Update model with data from Session %d'%s0)
+          self.update_joint_model(self.para['use_kde'])
+          
+        self.A_ref = self.A2.copy()
+        self.A_idx_ref = self.A_idx.copy()
+        self.s_ref = s
+        self.Cn_ref = self.Cn.copy()
     
     self.fit_model()
     
@@ -133,17 +138,25 @@ class Sheintuch_matching:
     
     self.para['model'] = model
     
-    self.progress = tqdm(zip(self.para['sessions'][1:],range(1,self.nS)),total=self.nS,leave=False)
+    d_arr = np.linspace(0,self.para['d_thr'],self.para['nbins']+1)[:-1]
+    d_arr += np.diff(d_arr)[0]/2
+    fp_arr = np.linspace(0,1,self.para['nbins']+1)[:-1]
+    fp_arr += np.diff(fp_arr)[0]/2
+    
+    self.f_same = sp.interpolate.RectBivariateSpline(d_arr,fp_arr,self.model['p_same']['joint'])
+    
+    self.progress = tqdm(zip(self.para['sessions'][1:],range(1,self.nS)),total=self.nS,leave=True)
     self.A0 = self.load_footprints(self.para['sessions'][0])
-    self.A_ref = self.A0.copy()
+    self.A_idx = np.squeeze(np.array((self.A0>0).sum(0)>50,'bool')) & self.session_data['idx_eval']
+    self.A_ref = self.A0[:,self.A_idx]
     A2_ref = self.A_ref.copy()
     self.s_ref = 0
+    self.Cn_ref = self.Cn.copy()
     
     self.data['nA'][0] = self.A_ref.shape[1]
     self.data['cm'][0] = com(self.A0,self.para['dims'][0],self.para['dims'][1]) * self.para['pxtomu']
-    self.matches = np.zeros((self.data['nA'][0],self.nS))*np.NaN
-    self.matches[:,0] = range(self.data['nA'][0])
-    
+    self.assignments = np.zeros((self.data['nA'][0],self.nS))*np.NaN
+    self.assignments[:self.data['nA'][0],0] = np.where(self.A_idx)[0]
     self.p_matched = np.zeros((self.data['nA'][0],self.nS))
     self.p_matched[:,0] = np.NaN
     
@@ -153,57 +166,64 @@ class Sheintuch_matching:
       self.cm_ref = com(self.A_ref,self.para['dims'][0],self.para['dims'][1]) * self.para['pxtomu']
       
       self.A2 = self.load_footprints(s0)
-      #tqdm.write('Session %d data contains %d neurons'%(s0))
-      _,_,_,c_max = get_shift_and_flow(A2_ref,self.A2,self.para['dims'],projection=1,plot_bool=False)
-      self.progress.set_description('A union size: %d, Aligning data from Session %d, c=%5.3g'%(self.nA_ref,s0,c_max))
-      
-      if c_max < 0.3:   ## don't include this session in matching
-        continue
-      self.prepare_footprints(A_ref=self.A0)
-      
-      self.A_idx = np.squeeze(np.array((self.A2>0).sum(0)>50,'bool'))
-      
-      self.data['nA'][s] = self.A2.shape[1]
-      self.data['cm'][s] = com(self.A2,self.para['dims'][0],self.para['dims'][1]) * self.para['pxtomu']
-      self.data['cm'][s][~self.A_idx,:] = np.NaN    ## some empty footprints might be in here
-      
-      self.progress.set_description('A union size: %d, Calculate statistics for Session %d'%(self.nA_ref,s0))
-      self.calculate_statistics(self.A_ref,self.A2,s,self.cm_ref)
-      
-      self.progress.set_description('A union size: %d, Obtaining matching probability for Session %d'%(self.nA_ref,s0))
-      self.data['p_same'][s] = self.calculate_p()
-      
-      #run hungarian matching with these (1-p_same) as score
-      self.progress.set_description('A union size: %d, Perform Hungarian matching on Session %d'%(self.nA_ref,s0))
-      matches, p_matched = self.find_matches(s, p_thr=p_thr, plot_results=plot_results)
-      
-      idx_TP = np.where(p_matched > p_thr)[0] ## thresholding results
-      if len(idx_TP) > 0:
-          matched_ref = matches[0][idx_TP]    # ground truth
-          matched2 = matches[1][idx_TP]   # algorithm - comp
-          non_matched_ref = np.setdiff1d(list(range(self.nA_ref)), matches[0][idx_TP])
-          non_matched2 = np.setdiff1d(list(range(self.data['nA'][s])), matches[1][idx_TP])
-          non_matched2 = non_matched2[self.A_idx[non_matched2]]
-          TP = np.sum(p_matched > p_thr).astype('float32')
-      
-      self.A_ref = self.A_ref.tolil()
-      #self.A_ref[:,mat_un] = w*self.A_ref[:,matched_ref] + (1-w)*self.A2[:,matched2]
-      self.A_ref[:,matched_ref] = self.A_ref[:,matched_ref].multiply(1-p_matched[idx_TP]) + self.A2[:,matched2].multiply(p_matched[idx_TP])
-      self.A_ref = sp.sparse.hstack([self.A_ref, self.A2[:,non_matched2]]).asformat('csc')
-      
-      N_add = len(non_matched2)
-      
-      self.matches[matched_ref,s] = matched2
-      match_add = np.zeros((N_add,self.nS))*np.NaN
-      match_add[:,s] = non_matched2
-      self.matches = np.vstack([self.matches,match_add])
-      
-      self.p_matched[matched_ref,s] = p_matched[idx_TP]
-      p_same_add = np.zeros((N_add,self.nS))*np.NaN
-      self.p_matched = np.vstack([self.p_matched,p_same_add])
-      
-      A2_ref = self.A2.copy()
-      self.s_ref = s
+      if not (self.A2 is None):
+        self.A_idx_ref = np.squeeze(np.array((self.A_ref>0).sum(0)>50,'bool')) & np.ones(self.nA_ref,'bool')
+        
+        #tqdm.write('Session %d data contains %d neurons'%(s0))
+        #_,_,_,c_max = get_shift_and_flow(A2_ref,self.A2,self.para['dims'],projection=1,plot_bool=False)
+        c_max,_ = calculate_img_correlation(self.Cn_ref,self.Cn,plot_bool=False)
+        
+        self.progress.set_description('A union size: %d, Aligning data from Session %d, c=%5.3g'%(self.nA_ref,s0,c_max))
+        
+        if c_max < self.para['session_correlation_thr']:   ## don't include this session in matching
+          print('Correlation c=%5.3g too low, skip session %d'%(c_max,s0))
+          continue
+        
+        self.prepare_footprints(A_ref=self.A0)
+        self.A_idx = np.squeeze(np.array((self.A2>0).sum(0)>50,'bool')) & self.session_data['idx_eval']
+        
+        self.data['nA'][s] = self.A2.shape[1]
+        self.data['cm'][s] = com(self.A2,self.para['dims'][0],self.para['dims'][1]) * self.para['pxtomu']
+        self.data['cm'][s][~self.A_idx,:] = np.NaN    ## some empty footprints might be in here
+        
+        self.progress.set_description('A union size: %d, Calculate statistics for Session %d'%(self.nA_ref,s0))
+        self.calculate_statistics(self.A_ref,self.A2,s,cm_ref=self.cm_ref)
+        
+        self.progress.set_description('A union size: %d, Obtaining matching probability for Session %d'%(self.nA_ref,s0))
+        self.data['p_same'][s] = self.calculate_p()
+        
+        #run hungarian matching with these (1-p_same) as score
+        self.progress.set_description('A union size: %d, Perform Hungarian matching on Session %d'%(self.nA_ref,s0))
+        matches, p_matched = self.find_matches(s, p_thr=p_thr, plot_results=plot_results)
+        
+        idx_TP = np.where(p_matched > p_thr)[0] ## thresholding results
+        if len(idx_TP) > 0:
+            matched_ref = matches[0][idx_TP]    # ground truth
+            matched2 = matches[1][idx_TP]   # algorithm - comp
+            non_matched_ref = np.setdiff1d(list(range(self.nA_ref)), matches[0][idx_TP])
+            non_matched2 = np.setdiff1d(list(np.where(self.A_idx)[0]), matches[1][idx_TP])  #range(self.data['nA'][s])
+            non_matched2 = non_matched2[self.A_idx[non_matched2]]
+            TP = np.sum(p_matched > p_thr).astype('float32')
+        
+        self.A_ref = self.A_ref.tolil()
+        #self.A_ref[:,mat_un] = w*self.A_ref[:,matched_ref] + (1-w)*self.A2[:,matched2]
+        self.A_ref[:,matched_ref] = self.A_ref[:,matched_ref].multiply(1-p_matched[idx_TP]) + self.A2[:,matched2].multiply(p_matched[idx_TP])
+        self.A_ref = sp.sparse.hstack([self.A_ref, self.A2[:,non_matched2]]).asformat('csc')
+        
+        N_add = len(non_matched2)
+        
+        self.assignments[matched_ref,s] = matched2
+        match_add = np.zeros((N_add,self.nS))*np.NaN
+        match_add[:,s] = non_matched2
+        self.assignments = np.vstack([self.assignments,match_add])
+        
+        self.p_matched[matched_ref,s] = p_matched[idx_TP]
+        p_same_add = np.zeros((N_add,self.nS))*np.NaN
+        self.p_matched = np.vstack([self.p_matched,p_same_add])
+        
+        A2_ref = self.A2.copy()
+        self.s_ref = s
+        self.Cn_ref = self.Cn.copy()
       
     if save_results:
       self.save_registration(suffix=save_suffix)
@@ -211,37 +231,45 @@ class Sheintuch_matching:
   
   
   def calculate_p(self):
-    """
-    Returns:
-        p_same: score matrix
-    
-    Raises:
-        Exception: 'Nan value produced. Error in inputs'
-    """
-    
-    d_arr = np.linspace(0,self.para['d_thr'],self.para['nbins']+1)[:-1]
-    fp_arr = np.linspace(0,1,self.para['nbins']+1)[:-1]
-    
-    d_w = np.diff(d_arr)[0]
-    fp_w = np.diff(fp_arr)[0]
-    
-    close_neighbours = self.session_data['D_ROIs'] < self.para['d_thr']
-    D_idx = (self.session_data['D_ROIs'][close_neighbours] / d_w).astype('int')
-    if self.para['model'] == 'new':
-      c_idx = (self.session_data['fp_corr_max'][close_neighbours] / fp_w).astype('int')
-      idx_mask = np.isnan(self.session_data['fp_corr_max'][close_neighbours])
-    else:
-      c_idx = (self.session_data['fp_corr'][close_neighbours] / fp_w).astype('int')
-      idx_mask = np.isnan(self.session_data['fp_corr'][close_neighbours])
-    
-    c_idx[idx_mask] = 0
     
     p_same = np.zeros(self.session_data['D_ROIs'].shape)
-    p_same[close_neighbours] = self.model['p_same']['joint'][D_idx,c_idx]
+    
+    close_neighbours = self.session_data['D_ROIs'] < self.para['d_thr']
     if self.para['model'] == 'new':
-      p_same[np.isnan(self.session_data['fp_corr_max'])] = 0
-    if self.para['model'] == 'old':
-      p_same[np.isnan(self.session_data['fp_corr'])] = 0
+      p_same[close_neighbours] = self.f_same.ev(self.session_data['D_ROIs'][close_neighbours],self.session_data['fp_corr_max'][close_neighbours])
+    else:
+      p_same[close_neighbours] = self.f_same.ev(self.session_data['D_ROIs'][close_neighbours],self.session_data['fp_corr'][close_neighbours])
+    
+    p_same[~self.A_idx_ref,:] = 0
+    p_same[:,~self.A_idx] = 0
+    
+    #p_same[np.where((self.A_ref>0).sum(0)<50)[1],:] = 0
+    p_same[p_same<0] = 0
+    p_same[p_same>1] = 1
+    
+    
+    #d_arr = np.linspace(0,self.para['d_thr'],self.para['nbins']+1)[:-1]
+    #fp_arr = np.linspace(0,1,self.para['nbins']+1)[:-1]
+    
+    #d_w = np.diff(d_arr)[0]
+    #fp_w = np.diff(fp_arr)[0]
+    
+    #D_idx = (self.session_data['D_ROIs'][close_neighbours] / d_w).astype('int')
+    #if self.para['model'] == 'new':
+      #c_idx = (self.session_data['fp_corr_max'][close_neighbours] / fp_w).astype('int')
+      #idx_mask = np.isnan(self.session_data['fp_corr_max'][close_neighbours])
+    #else:
+      #c_idx = (self.session_data['fp_corr'][close_neighbours] / fp_w).astype('int')
+      #idx_mask = np.isnan(self.session_data['fp_corr'][close_neighbours])
+    
+    #c_idx[idx_mask] = 0
+    
+    
+    #p_same[close_neighbours] = self.model['p_same']['joint'][D_idx,c_idx]
+    #if self.para['model'] == 'new':
+      #p_same[np.isnan(self.session_data['fp_corr_max'])] = 0
+    #if self.para['model'] == 'old':
+      #p_same[np.isnan(self.session_data['fp_corr'])] = 0
     
     return sp.sparse.csc_matrix(p_same)
   
@@ -330,14 +358,21 @@ class Sheintuch_matching:
   def load_footprints(self,s):
     
     pathData = pathcat([self.para['pathMouse'],'Session%02d'%s,self.para['fp_file']])
-    try:
-      ld = loadmat(pathData,variable_names=['A','idx_evaluate','SNR','r_values'],squeeze_me=True)
-      idxes = (ld['SNR']>self.para['SNR_thr']) & (ld['r_values']>self.para['r_thr'])
-      return ld['A'][:,idxes]
-    except:
-      ld = loadmat(pathData,variable_names=['A'],squeeze_me=True)
-      return ld['A']
-  
+    pathBG = pathcat([self.para['pathMouse'],'Session%02d/results_OnACID.mat'])
+    if os.path.exists(pathData):
+      try:
+        ld = loadmat(pathData,variable_names=['Cn'],squeeze_me=True)
+        self.Cn = ld['Cn']
+        ld = loadmat(pathData,variable_names=['A','idx_evaluate','SNR','r_values'],squeeze_me=True)
+        self.session_data['idx_eval'] = (ld['SNR']>self.para['SNR_thr']) & (ld['r_values']>self.para['r_thr'])
+        return ld['A']#[:,self.session_data['idx_eval']]
+      except:
+        ld = loadmat(pathData,variable_names=['A'],squeeze_me=True)
+        self.session_data['idx_eval'] = np.ones(ld['A'].shape[1],'bool')
+        self.Cn = np.array(ld['A'].sum(1).reshape(512,512))
+        return ld['A']
+    else:
+      return None
   
   def prepare_footprints(self,A_ref=None,align_flag=True,use_opt_flow=True,max_thr=0.001):
     
@@ -367,10 +402,13 @@ class Sheintuch_matching:
     self.A2 = sp.sparse.vstack([a.multiply(a>max_thr*a.max())/a.max() if (a>0).sum()>50 else sp.sparse.csr_matrix(a.shape) for a in self.A2.T]).T
     
     
-  def calculate_statistics(self,A1,A2,s,cm_ref=None,binary='half'):
+  def calculate_statistics(self,A1,A2,s,cm_ref=None,A_idx_ref=None,binary='half'):
     
     if cm_ref is None:
       cm_ref = self.data['cm'][self.s_ref]
+    
+    if A_idx_ref is None:
+      A_idx_ref = self.A_idx_ref
     nA_ref = cm_ref.shape[0]
     
     self.session_data['D_ROIs'] = sp.spatial.distance.cdist(cm_ref,self.data['cm'][s])
@@ -384,7 +422,7 @@ class Sheintuch_matching:
     self.session_data['nearest_neighbour'][idx_good,idx_NN] = True
     
     for i in tqdm(range(nA_ref),desc='calculating footprint correlation of %d neurons'%nA_ref,leave=False):
-      if self.A_ref[:,i].sum()>0:
+      if A_idx_ref[i]:#A1[:,i].sum()>0:
         for j in np.where(self.session_data['D_ROIs'][i,:]<self.para['d_thr'])[0]:
           if self.A_idx[j]:
             try:
@@ -400,13 +438,15 @@ class Sheintuch_matching:
     #self.session_data['fp_corr_max'].tocsc()
     
   
-  def update_joint_model(self,s,use_kde):
+  def update_joint_model(self,use_kde,ds=1,s=None):
     
     distance_arr = np.linspace(0,self.para['d_thr'],self.para['nbins']+1)
     fpcorr_arr = np.linspace(0,1,self.para['nbins']+1)
-    
     if use_kde:
-      idxes = self.model['kernel']['idxes'][self.s_ref]
+      if ds>0:
+        idxes = self.model['kernel']['idxes'][self.s_ref]
+      else:
+        idxes = self.model['kernel']['idxes'][s]
     else:
       idxes = np.ones(self.session_data['D_ROIs'].shape[0],'bool') 
     
@@ -424,17 +464,23 @@ class Sheintuch_matching:
         if (self.para['model']=='old') | (self.para['model']=='both'):
           idx_fp = (fp_corr > fpcorr_arr[j]) & (fpcorr_arr[j+1] > fp_corr)
           idx_vals = idx_dist & idx_fp
-          self.model['counts_old'][i,j,0] += np.count_nonzero(idx_vals)
-          self.model['counts_old'][i,j,1] += np.count_nonzero(idx_vals & NN_idx)
-          self.model['counts_old'][i,j,2] += np.count_nonzero(idx_vals & ~NN_idx)
-        
+          if ds>0:
+            self.model['counts_old'][i,j,0] += np.count_nonzero(idx_vals)
+            self.model['counts_old'][i,j,1] += np.count_nonzero(idx_vals & NN_idx)
+            self.model['counts_old'][i,j,2] += np.count_nonzero(idx_vals & ~NN_idx)
+          else:
+            self.model['counts_same_old'][i,j] += np.count_nonzero(idx_vals & ~NN_idx)
+            
         if (self.para['model']=='new') | (self.para['model']=='both'):
           idx_fp = (fp_corr_max > fpcorr_arr[j]) & (fpcorr_arr[j+1] > fp_corr_max)
           idx_vals = idx_dist & idx_fp
-          self.model['counts'][i,j,0] += np.count_nonzero(idx_vals)
-          self.model['counts'][i,j,1] += np.count_nonzero(idx_vals & NN_idx)
-          self.model['counts'][i,j,2] += np.count_nonzero(idx_vals & ~NN_idx)
-        
+          if ds>0:
+            self.model['counts'][i,j,0] += np.count_nonzero(idx_vals)
+            self.model['counts'][i,j,1] += np.count_nonzero(idx_vals & NN_idx)
+            self.model['counts'][i,j,2] += np.count_nonzero(idx_vals & ~NN_idx)
+          else:
+            self.model['counts_same'][i,j] += np.count_nonzero(idx_vals & ~NN_idx)
+          
   def position_kde(self,A,s,qtl=[0.05,0.95],plot_bool=False):
     
     #print('calculating kernel density estimates for session %d'%s)
@@ -552,17 +598,7 @@ class Sheintuch_matching:
       if self.model[key_counts][:,i,2].sum() > counts_thr:
         dat = joint_hist_norm_dist[:,i,2]/joint_hist_norm_dist[:,i,2].sum()*nbins/self.para['d_thr']
         self.model['fit_parameter']['joint']['distance']['nNN'][i,:] = curve_fit(self.model['fit_function']['distance']['nNN_joint'],d_arr,dat,bounds=bounds_d_nNN)[0]
-      #else:
-        #self.model['fit_parameter']['joint']['distance']['nNN'][i,:] = 0
-        
-      #try:
-        #p0 = np.hstack([self.model['p_same']['single']['fp_correlation'][i],self.model['fit_parameter']['joint']['distance']['NN'][i,:],self.model['fit_parameter']['joint']['distance']['nNN'][i,:]])
-        #p0[np.isnan(p0)] = 0
-        #dat = joint_hist_norm_dist[:,i,0]/joint_hist_norm_dist[:,i,0].sum()*nbins/self.para['d_thr']
-        #self.model['fit_parameter']['joint']['distance']['all'][i,:] = curve_fit(self.model['fit_function']['distance']['all'],d_arr,dat,bounds=bounds_d,p0=p0)[0]
-      #except:
-        #1
-        
+      
       ### to fp-correlation: NN - reverse lognormal, nNN - reverse lognormal
       if self.model[key_counts][i,:,1].sum() > counts_thr:
         dat = joint_hist_norm_corr[i,:,1]/joint_hist_norm_corr[i,:,1].sum()*nbins
@@ -575,16 +611,8 @@ class Sheintuch_matching:
         self.model['fit_parameter']['joint']['fp_correlation']['nNN'][i,:] = curve_fit(self.model['fit_function']['fp_correlation']['nNN_joint'],fp_arr,dat,bounds=bounds_corr_nNN)[0]
       #else:
         #self.model['fit_parameter']['joint']['fp_correlation']['nNN'][i,:] = 0
-        
-      #try:
-        #p0 = np.hstack([self.model['p_same']['single']['distance'][i],self.model['fit_parameter']['joint']['fp_correlation']['NN'][i,:],self.model['fit_parameter']['joint']['fp_correlation']['nNN'][i,:]])
-        ##p0[np.isnan(p0)] = 0
-        #dat = joint_hist_norm_corr[i,:,1]/joint_hist_norm_corr[i,:,0].sum()*nbins
-        #self.model['fit_parameter']['joint']['fp_correlation']['all'][i,:] = curve_fit(self.model['fit_function']['fp_correlation']['all'],fp_arr,dat,bounds=bounds_corr,p0=p0,method='dogbox')[0]
-      #except:
-        #1
       
-    
+      
     arrays = {'distance':         d_arr,
               'fp_correlation':   fp_arr}
     
@@ -628,7 +656,8 @@ class Sheintuch_matching:
         self.model['pdf']['joint'][0,n,:] = f_NN*self.model['p_same']['single']['distance'][n]
     for n in range(nbins):
       if not np.any(np.isnan(self.model['fit_parameter']['joint']['fp_correlation']['nNN'][n,:])):
-        self.model['pdf']['joint'][1,n,:] = fun_wrapper(self.model['fit_function']['fp_correlation']['nNN_joint'],fp_arr,self.model['fit_parameter']['joint']['fp_correlation']['nNN'][n,:])*(1-self.model['p_same']['single']['distance'][n])
+        f_nNN = fun_wrapper(self.model['fit_function']['fp_correlation']['nNN_joint'],fp_arr,self.model['fit_parameter']['joint']['fp_correlation']['nNN'][n,:])
+        self.model['pdf']['joint'][1,n,:] = f_nNN*(1-self.model['p_same']['single']['distance'][n])
     
     #self.model['pdf']['joint'] = np.zeros((2,nbins,nbins))
     #for n in range(nbins):
@@ -641,12 +670,15 @@ class Sheintuch_matching:
         #self.model['pdf']['joint'][1,:,n] = f_nNN*(1-self.model['p_same']['single']['fp_correlation'][n])
     
     ## obtain probability of being same neuron
-    self.model['p_same']['joint'] = self.model['pdf']['joint'][0,...]/np.nansum(self.model['pdf']['joint'],0)
+    self.model['p_same']['joint'] = 1-self.model['pdf']['joint'][1,...]/np.nansum(self.model['pdf']['joint'],0)
     #if count_thr > 0:
       #self.model['p_same']['joint'] *= np.minimum(self.model[key_counts][...,0],count_thr)/count_thr
     #sp.ndimage.filters.gaussian_filter(self.model['p_same']['joint'],2,output=self.model['p_same']['joint'])
     
+  #def get_p_same(self,d,fp):
     
+    #f_total
+  
   
   def set_functions(self):
     
@@ -715,8 +747,6 @@ class Sheintuch_matching:
     ax_phase = plt.axes([0.3,0.13,0.2,0.4])
     #ax_phase.imshow(self.model[key_counts][:,:,0],extent=[0,1,0,self.para['d_thr']],aspect='auto',clim=[0,0.25*self.model[key_counts][:,:,0].max()],origin='lower')
     NN_ratio = self.model[key_counts][:,:,1]/self.model[key_counts][:,:,0]
-    #NN_ratio[self.model[key_counts][:,:,0]<50] = np.NaN
-    
     cmap = plt.cm.RdYlGn
     NN_ratio = cmap(NN_ratio)
     NN_ratio[...,-1] = np.minimum(self.model[key_counts][...,0]/100,1)
@@ -1087,6 +1117,66 @@ class Sheintuch_matching:
     #return
     
     
+    counts1 = sp.ndimage.gaussian_filter(self.model['counts'][...,0],[1,1])
+    counts2 = sp.ndimage.gaussian_filter(self.model['counts_same'],[1,1])
+    
+    counts1 /= counts1.sum(1)[-10:].sum()
+    counts2 /= counts2.sum(1)[-10:].sum()
+    
+    counts_dif = counts1-counts2
+    counts_dif[self.model['counts'][...,0]<2] = 0
+    
+    p_same = counts_dif/counts1
+    p_same[counts1==0] = 0
+    p_same = sp.ndimage.median_filter(p_same,[3,3],mode='nearest')
+    self.f_same = sp.interpolate.RectBivariateSpline(d_arr,fp_arr,p_same,kx=1,ky=1)
+    p_same = np.maximum(0,sp.ndimage.gaussian_filter(self.f_same(d_arr,fp_arr),[1,1]))
+    
+    #self.model['p_same']['joint'] = p_same
+    plt.figure()
+    X, Y = np.meshgrid(fp_arr, d_arr)
+    
+    ax = plt.subplot(221,projection='3d')
+    ax.plot_surface(X,Y,counts1,alpha=0.5)
+    ax.plot_surface(X,Y,counts2,alpha=0.5)
+    
+    ax = plt.subplot(222,projection='3d')
+    ax.plot_surface(X,Y,counts_dif,cmap='jet')
+    
+    ax = plt.subplot(223,projection='3d')
+    ax.plot_surface(X,Y,p_same,cmap='jet')
+    
+    ax = plt.subplot(224,projection='3d')
+    ax.plot_surface(X,Y,self.model['p_same']['joint'],cmap='jet')
+    
+    plt.show(block=False)
+    
+    
+    
+    
+    
+    plt.figure()
+    ax = plt.subplot(111,projection='3d')
+    X, Y = np.meshgrid(fp_arr, d_arr)
+    NN_ratio = self.model[key_counts][:,:,1]/self.model[key_counts][:,:,0]
+    cmap = plt.cm.RdYlGn
+    NN_ratio = cmap(NN_ratio)
+    ax.plot_surface(X,Y,self.model[key_counts][:,:,0],facecolors=NN_ratio)
+    ax.view_init(30,-120)
+    ax.set_xlabel('footprint correlation',fontsize=14)
+    ax.set_ylabel('distance',fontsize=14)
+    ax.set_zlabel('# pairs',fontsize=14)
+    plt.tight_layout()
+    plt.show(block=False)
+    
+    if sv:
+      ext = 'png'
+      path = pathcat([self.para['pathMouse'],'Sheintuch_matching_phase_%s%s.%s'%(self.para['model'],suffix,ext)])
+      plt.savefig(path,format=ext,dpi=300)
+    
+    return
+    
+    
     plt.figure()
     plt.subplot(221)
     plt.imshow(self.model[key_counts][:,:,0],extent=[0,1,0,self.para['d_thr']],aspect='auto',clim=[0,self.model[key_counts][:,:,0].max()],origin='lower')
@@ -1102,7 +1192,6 @@ class Sheintuch_matching:
     plt.subplot(224)
     plt.imshow(self.model[key_counts][...,2],extent=[0,1,0,self.para['d_thr']],aspect='auto',origin='lower')
     plt.show(block=False)
-    
     
     
     
@@ -1244,25 +1333,22 @@ class Sheintuch_matching:
   def save_registration(self,suffix=''):
     
     idx = self.data['nA']>0
-    results = {'assignment':self.matches,
+    results = {'assignments':self.assignments,
                'p_matched':self.p_matched,
                'p_same':self.data['p_same'],
                'nA':self.data['nA']}
     
-    print(results['assignment'].shape)
+    print(results['assignments'].shape)
     
-    results['cm'] = np.zeros(results['assignment'].shape + (2,))
+    results['cm'] = np.zeros(results['assignments'].shape + (2,))
     
     for s in np.where(idx)[0]:
-      print(s)
-      idx_c = np.where(~np.isnan(results['assignment'][:,s]))[0]
-      idx_n = results['assignment'][idx_c,s].astype('int')
+      idx_c = np.where(~np.isnan(results['assignments'][:,s]))[0]
+      idx_n = results['assignments'][idx_c,s].astype('int')
       if s>0:
         results['p_same'][s] = sp.sparse.csr_matrix(results['p_same'][s])
-      #if s==self.nS-1:
+      
       results['cm'][idx_c,s,:] = self.data['cm'][s][idx_n,:]
-      #else:
-        #results['cm'][idx_c,s,:] = self.data['cm'][s][idx_c,:]
       
     
     pathSv = pathcat([self.para['pathMouse'],'matching/Sheintuch_registration_%s%s.pkl'%(os.path.splitext(self.para['fp_file'])[0],suffix)])
@@ -1271,14 +1357,142 @@ class Sheintuch_matching:
   def load_registration(self,suffix=''):
     
     pathLd = pathcat([self.para['pathMouse'],'matching/Sheintuch_registration_%s%s.pkl'%(os.path.splitext(self.para['fp_file'])[0],suffix)])
-    return pickleData([],pathLd,'load')
+    self.results = pickleData([],pathLd,'load')
+    #try:
+      #self.results['assignments'] = self.results['assignment']
+    #except:
+      #1
+  
+  def plot_registration(self,suffix='',dataSet='redetect'):
+    
+    pathLoad = pathcat([self.para['pathMouse'],'clusterStats_%s.pkl'%dataSet])
+    ld = pickleData([],pathLoad,'load')
+    if np.all(np.isnan(ld['SNR'])):
+      idxes = np.ones(self.results['assignments'].shape,'bool')
+    else:
+      idxes = (ld['SNR']>2) & (ld['r_values']>0) & (ld['CNN']>0.6) & (ld['firingrate']>0)
+    
+    ### plot occurence of neurons
+    colors = [(1,0,0,0),(1,0,0,1)]
+    RedAlpha = mcolors.LinearSegmentedColormap.from_list('RedAlpha',colors,N=2)
+    colors = [(0,0,0,0),(0,0,0,1)]
+    BlackAlpha = mcolors.LinearSegmentedColormap.from_list('BlackAlpha',colors,N=2)
+    
+    
+    plt.figure(figsize=(3,6))
+    
+    ### plot occurence of neurons
+    ax_oc = plt.subplot(111)
+    #ax_oc2 = ax_oc.twinx()
+    ax_oc.imshow((~np.isnan(self.results['assignments']))&idxes,cmap=BlackAlpha,aspect='auto')
+    #ax_oc2.imshow((~np.isnan(self.results['assignments']))&(~idxes),cmap=RedAlpha,aspect='auto')
+    #ax_oc.imshow(self.results['p_matched'],cmap='binary',aspect='auto')
+    ax_oc.set_xlabel('session')
+    ax_oc.set_ylabel('neuron ID')
+    plt.tight_layout()
+    plt.show(block=False)
+    ext = 'png'
+    path = pathcat([self.para['pathMouse'],'Figures/Sheintuch_registration_score_stats_raw_%s_%s_%s.%s'%(self.dataSet,self.para['model'],suffix,ext)])
+    plt.savefig(path,format=ext,dpi=300)
+    
+    
+    plt.figure(figsize=(7,3.5))
+    
+    ax_oc = plt.axes([0.1,0.15,0.25,0.6])
+    ax_oc2 = ax_oc.twinx()
+    ax_oc.imshow((~np.isnan(self.results['assignments']))&idxes,cmap=BlackAlpha,aspect='auto')
+    ax_oc2.imshow((~np.isnan(self.results['assignments']))&(~idxes),cmap=RedAlpha,aspect='auto')
+    #ax_oc.imshow(self.results['p_matched'],cmap='binary',aspect='auto')
+    ax_oc.set_xlabel('session')
+    ax_oc.set_ylabel('neuron ID')
+    
+    self.results['p_matched'][self.results['p_matched']==0] = np.NaN
+    nC,nS = self.results['assignments'].shape
+    ### plot point statistics
+    if not ('match_2nd' in self.results.keys()):
+      self.results['match_2nd'] = np.zeros((nC,nS))
+      for s in tqdm(range(1,nS)):
+        if s in self.results['p_same'].keys():
+          idx_c = np.where(~np.isnan(self.results['assignments'][:,s]))[0]
+          idx_c = idx_c[idx_c<self.results['p_same'][s].shape[0]]
+          scores_now = self.results['p_same'][s].toarray()
+        
+          self.results['match_2nd'][idx_c,s] = [max(scores_now[c,np.where(scores_now[c,:]!=self.results['p_matched'][c,s])[0]]) for c in idx_c]
+    
+    ax = plt.axes([0.1,0.75,0.25,0.2])
+    ax.plot(np.linspace(0,nS,nS),(~np.isnan(self.results['assignments'])).sum(0),'ro',markersize=1)
+    ax.plot(np.linspace(0,nS,nS),((~np.isnan(self.results['assignments'])) & idxes).sum(0),'ko',markersize=1)
+    ax.set_xlim([0,nS])
+    ax.set_ylim([0,3500])
+    ax.set_xticks([])
+    ax.set_ylabel('# neurons')
+    
+    ax = plt.axes([0.35,0.15,0.1,0.6])
+    ax.plot(((~np.isnan(self.results['assignments'])) & idxes).sum(1),np.linspace(0,nC,nC),'ko',markersize=0.5)
+    ax.invert_yaxis()
+    ax.set_ylim([nC,0])
+    ax.set_yticks([])
+    ax.set_xlabel('occurence')
+    
+    ax = plt.axes([0.35,0.75,0.1,0.2])
+    ax.hist((~np.isnan(self.results['assignments'])).sum(1),np.linspace(0,nS,nS),color='r',cumulative=True,density=True,histtype='step')
+    ax.hist(((~np.isnan(self.results['assignments'])) & idxes).sum(1),np.linspace(0,nS,nS),color='k',alpha=0.5,cumulative=True,density=True,histtype='step')
+    ax.set_xticks([])
+    #ax.set_yticks([])
+    ax.yaxis.tick_right()
+    ax.yaxis.set_label_position("right")
+    ax.set_ylim([0,1])
+    #ax.set_ylabel('# neurons')
+    ax.spines['top'].set_visible(False)
+    #ax.spines['right'].set_visible(False)
+    
+    ax_sc1 = plt.axes([0.6,0.625,0.35,0.325])
+    ax_sc1.plot([0,1],[0,1],'r--')
+    
+    ax = ax_sc1.twinx()
+    ax.hist(self.results['match_2nd'][idxes].flat,np.linspace(0,1,51),facecolor='r',alpha=0.3)
+    #ax.invert_yaxis()
+    ax.set_yticks([])
+    
+    ax = ax_sc1.twiny()
+    ax.hist(self.results['p_matched'][idxes].flat,np.linspace(0,1,51),facecolor='b',orientation='horizontal',alpha=0.3)
+    ax.set_xticks([])
+    
+    ax_sc1.plot(self.results['match_2nd'][idxes].flat,self.results['p_matched'][idxes].flat,'.',markeredgewidth=0,color='k',markersize=1)
+    ax_sc1.set_ylabel('$p^{\\asterisk}$')
+    ax_sc1.set_xlabel('max($p\\backslash p^{\\asterisk}$)')
+    
+    # match vs max
+    
+    # avg matchscore per cluster, min match score per cluster, ...
+    ax_sc2 = plt.axes([0.6,0.15,0.35,0.325])
+    #plt.hist(np.nanmean(self.results['p_matched'],1),np.linspace(0,1,51))
+    ax = ax_sc2.twinx()
+    ax.hist(np.nanmin(self.results['p_matched'],1),np.linspace(0,1,51),facecolor='r',alpha=0.3)
+    ax.set_yticks([])
+    
+    ax = ax_sc2.twiny()
+    ax.hist(np.nanmean(self.results['p_matched'],axis=1),np.linspace(0,1,51),facecolor='b',orientation='horizontal',alpha=0.3)
+    ax.set_xticks([])
+    
+    ax_sc2.plot(np.nanmin(self.results['p_matched'],1),np.nanmean(self.results['p_matched'],axis=1),'.',markeredgewidth=0,color='k',markersize=1)
+    ax_sc2.set_xlabel('min($p^{\\asterisk}$)')
+    ax_sc2.set_ylabel('$\left\langle p^{\\asterisk} \\right\\rangle$')
+    
+    ### plot positions of neurons
+    plt.tight_layout()
+    plt.show(block=False)
+    
+    ext = 'png'
+    path = pathcat([self.para['pathMouse'],'Figures/Sheintuch_registration_score_stats_%s_%s_%s.%s'%(self.dataSet,self.para['model'],suffix,ext)])
+    plt.savefig(path,format=ext,dpi=300)
     
   def save_model(self,suffix=''):
     
     pathSv = pathcat([self.para['pathMouse'],'matching/Sheintuch_model_%s%s.pkl'%(os.path.splitext(self.para['fp_file'])[0],suffix)])
     
     results = {}
-    for key in ['p_same','fit_parameter','pdf','counts','counts_old']:
+    for key in ['p_same','fit_parameter','pdf','counts','counts_old','counts_same','counts_same_old']:
       results[key] = self.model[key]
     pickleData(results,pathSv,'save')
     

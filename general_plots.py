@@ -285,24 +285,24 @@ def plot_session_shifts(basePath,mouse,sessions=None,dataSet='OnACID',pltSave=Fa
   
   pathMouse = pathcat([basePath,mouse])
   pathSession1 = pathcat([pathMouse,'Session%02d/results_%s.mat' % (sessions[0],dataSet)])
-  ROIs1_ld = loadmat(pathSession1,variable_names=['A'])
+  ROIs1_ld = loadmat(pathSession1,variable_names=['A','Cn'])
   
   pathSession2 = pathcat([pathMouse,'Session%02d/results_%s.mat' % (sessions[1],dataSet)])
-  ROIs2_ld = loadmat(pathSession2,variable_names=['A'])
+  ROIs2_ld = loadmat(pathSession2,variable_names=['A','Cn'])
   
   A1 = ROIs1_ld['A']
   A2 = ROIs2_ld['A']
   #dims = Cn.shape
   
   get_shift_and_flow(A1,A2,plot_bool=True)
-  #Cn2 = cv2.remap(Cn2.astype(np.float32), x_remap, y_remap, cv2.INTER_NEAREST)
+  #Cn2 = cv2.remap(ROIs2_ld['Cn'].astype(np.float32), x_remap, y_remap, cv2.INTER_NEAREST)
   
-  #plt.figure()
-  #plt.subplot(1,2,1)
-  #plt.imshow(Cn)
-  #plt.subplot(1,2,2)
-  #plt.imshow(Cn2+Cn)
-  #plt.show(block=False)
+  plt.figure()
+  plt.subplot(1,2,1)
+  plt.imshow(ROIs1_ld['Cn'])
+  plt.subplot(1,2,2)
+  plt.imshow(ROIs2_ld['Cn'])
+  plt.show(block=False)
   
   if pltSave:
     plt.savefig('%ssession_shift.png'%pathPlots)
